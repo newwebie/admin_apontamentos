@@ -51,7 +51,8 @@ def update_colaboradores_sheet(colaboradores_df):
         file_name_only = file_name.split("/")[-1]
         target_folder = ctx.web.get_folder_by_server_relative_url(folder_path)
         target_folder.upload_file(file_name_only, file_content).execute_query()
-        st.success("Arquivo atualizado com sucesso!")
+        st.cache_data.clear()
+        st.success("Para ver as mudanças ou submeter novas alterações, tecle F5")
     except Exception as e:
         st.error(f"Erro ao atualizar a planilha de colaboradores no SharePoint: {e}")
 
@@ -89,10 +90,10 @@ def update_sharepoint_file(df_editado):
 # -------------------------------------------------------------------
 def main():
     st.title("")
-    tabs = st.tabs(["Apontamentos ADM", "Edição Colaboradores", "Novo Colaborador"])
+    tabs = st.tabs(["Apontamentos ADM", "Edição Colaboradores", "Cadastrar Colaborador"])
 
     with tabs[2]:
-        st.title("Cadastrar Colaborador")
+        st.title("Novo Colaborador")
         # Lê os dados do Excel com cache
         staff_df, colaboradores_df = read_excel_sheets_from_sharepoint()
         
@@ -206,10 +207,8 @@ def main():
             
             # Atualiza a aba "Colaboradores" no Excel do SharePoint
             update_colaboradores_sheet(colaboradores_df)
+
             
-            # Limpa o cache para que a próxima leitura traga os dados atualizados e
-            # força uma recarga da aplicação (F5 automático)
-            st.cache_data.clear()
     
     with tabs[1]:
         st.title('Base Colaboradores')
@@ -259,8 +258,77 @@ def main():
             )
 
             if st.button("Salvar Modificações"):
-                 update_colaboradores_sheet(df_editado)
-                 st.success("Alterações salvas com sucesso!")
+                erros = []
+                df_atualizado = df.copy()
+                hoje_formatado = datetime.today().strftime("%d/%m/%Y")
+                alguma_linha_modificada = False
+
+                for idx, row in df_editado.iterrows():
+                    original_row = df.loc[idx]
+                    alterado = False
+
+                    cpf = str(row.get("CPF ou CNPJ", "")).strip()
+                    cargo = row.get("Cargo", "").strip()
+                    escala = row.get("Escala", "").strip()
+                    horario = row.get("Horário", "").strip()
+                    turma = row.get("Turma", "").strip()
+
+                    # Verifica se a combinação existe na planilha de staff
+                    filtro_staff = staff_df[
+                        (staff_df["Cargo"] == cargo) &
+                        (staff_df["Escala"] == escala) &
+                        (staff_df["Horário"] == horario) &
+                        (staff_df["Turma"] == turma)
+                    ]
+
+                    if filtro_staff.empty:
+                        erros.append(f"❌ Linha {idx}: combinação inválida de Cargo / Escala / Horário / Turma.")
+                        continue
+
+                    # Verifica se há CPF duplicado (ignorando a própria linha)
+                    cpfs_sem_atual = df_editado.drop(index=idx)["CPF ou CNPJ"].astype(str).tolist()
+                    if cpf in cpfs_sem_atual:
+                        erros.append(f"❌ Linha {idx}: CPF/CNPJ duplicado: {cpf}.")
+
+                    # Verifica se o limite de colaboradores foi excedido
+                    max_colabs = int(filtro_staff["Quantidade Staff"].iloc[0])
+                    filtro_colab = df_editado[
+                        (df_editado["Escala"] == escala) &
+                        (df_editado["Horário"] == horario) &
+                        (df_editado["Turma"] == turma) &
+                        (df_editado["Cargo"] == cargo)
+                    ]
+                    count_atual = filtro_colab.shape[0]
+                    if count_atual > max_colabs:
+                        erros.append(
+                            f"❌ Linha {idx}: limite de colaboradores excedido para a combinação:<br>"
+                            f"• {cargo} / {escala} / {horario} / {turma} — máximo permitido: {max_colabs}."
+                        )
+
+                    # Verifica se a linha foi alterada
+                    for col in df.columns:
+                        val_antigo = str(original_row.get(col, "")).strip()
+                        val_novo = str(row.get(col, "")).strip()
+                        if val_antigo != val_novo:
+                            alterado = True
+                            break
+
+                    if alterado:
+                        alguma_linha_modificada = True
+                        df_atualizado.loc[idx] = row
+                        df_atualizado.at[idx, "Atualização"] = hoje_formatado
+
+                if erros:
+                    st.error("⚠️ Não foi possível salvar devido aos seguintes problemas:")
+                    for e in erros:
+                        st.markdown(f"- {e}", unsafe_allow_html=True)
+                elif not alguma_linha_modificada:
+                    st.info("Nenhuma modificação foi detectada. Nada foi salvo.")
+                else:
+                    update_colaboradores_sheet(df_atualizado)
+                    st.success("Alterações salvas com sucesso!")
+
+
 
     
     with tabs[0]:
