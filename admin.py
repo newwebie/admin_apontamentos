@@ -30,6 +30,25 @@ def read_excel_sheets_from_sharepoint():
         st.error(f"Erro ao acessar o arquivo ou ler as planilhas no SharePoint: {e}")
         return pd.DataFrame(), pd.DataFrame()
 
+def update_staff_sheet(staff_df):
+    try:
+        ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
+        # Lê o workbook para manter Colaboradores intacto
+        response = File.open_binary(ctx, file_name)
+        xls = pd.ExcelFile(io.BytesIO(response.content))
+        colaboradores_df = pd.read_excel(xls, sheet_name="Colaboradores")
+
+        out = io.BytesIO()
+        with pd.ExcelWriter(out, engine="openpyxl") as w:
+            staff_df.to_excel(w, sheet_name="Staff Operações Clínica", index=False)
+            colaboradores_df.to_excel(w, sheet_name="Colaboradores", index=False)
+        out.seek(0)
+
+        folder = "/".join(file_name.split("/")[:-1])
+        name   = file_name.split("/")[-1]
+        ctx.web.get_folder_by_server_relative_url(folder).upload_file(name, out.read()).execute_query()
+    except Exception as e:
+        st.error(f"Erro ao atualizar Staff: {e}")
 
 def update_colaboradores_sheet(colaboradores_df):
     try:
@@ -89,10 +108,10 @@ def update_sharepoint_file(df_editado):
 # Função principal com o formulário de cadastro
 # -------------------------------------------------------------------
 def main():
-    st.title("")
-    tabs = st.tabs(["Apontamentos ADM", "Edição Colaboradores", "Cadastrar Colaborador"])
+    st.title("📋 Painel ADM")
+    tabs = st.tabs(["Apontamentos", "Posições", "Edição Colaboradores", "Cadastrar Colaborador"])
 
-    with tabs[2]:
+    with tabs[3]:
         st.title("Novo Colaborador")
         # Lê os dados do Excel com cache
         staff_df, colaboradores_df = read_excel_sheets_from_sharepoint()
@@ -146,7 +165,7 @@ def main():
             if not nome.strip() or not cpf.strip() or not supervisao.strip() or not responsavel.strip():
                 st.error("Preencha os campos obrigatórios: Nome, CPF/CNPJ, Supervisão Direta e Responsável.")
                 return
-            
+
             # Verifica se a combinação (Escala, Horário, Turma, Cargo) existe na aba de Staff
             filtro_staff = staff_df[
                 (staff_df["Escala"] == escala) &
@@ -157,10 +176,10 @@ def main():
             if filtro_staff.empty:
                 st.error("Essa combinação de Escala / Horário / Turma / Cargo não existe na planilha base.")
                 return
-            
+
             # Pega a quantidade máxima permitida para essa combinação
             max_colabs = int(filtro_staff["Quantidade Staff"].iloc[0])
-            
+
             # Conta quantos colaboradores já foram cadastrados para essa combinação
             filtro_colab = colaboradores_df[
                 (colaboradores_df["Escala"] == escala) &
@@ -168,21 +187,17 @@ def main():
                 (colaboradores_df["Turma"] == turma) &
                 (colaboradores_df["Cargo"] == cargo)
             ]
-            count_atual = filtro_colab.shape[0]
-            if count_atual >= max_colabs:
+            if filtro_colab.shape[0] >= max_colabs:
                 st.error(f"Limite de colaboradores atingido para essa combinação: {max_colabs}")
                 return
 
-
+            # Verifica duplicidade de CPF
             if cpf in colaboradores_df["CPF ou CNPJ"].astype(str).values:
                 st.error("Já existe um colaborador cadastrado com este CPF/CNPJ.")
-            return
-            
-            # Formata a data de cadastro
-            data_formatada = datetime.today().strftime("%d/%m/%Y")
-            
+                return
 
-            # Cria o novo registro do colaborador
+            # Se chegou aqui, todos os checks passaram
+            data_formatada = datetime.today().strftime("%d/%m/%Y")
             novo_colaborador = {
                 "Nome Completo do Profissional": nome,
                 "CPF ou CNPJ": cpf,
@@ -200,17 +215,16 @@ def main():
                 "Responsável pela Inclusão dos dados": responsavel,
                 "CreatedAt": data_formatada
             }
-            
-            # Concatena o novo colaborador com os já cadastrados
             novo_df = pd.DataFrame([novo_colaborador])
             colaboradores_df = pd.concat([colaboradores_df, novo_df], ignore_index=True)
-            
+
             # Atualiza a aba "Colaboradores" no Excel do SharePoint
             update_colaboradores_sheet(colaboradores_df)
-
+            st.cache_data.clear()
+            st.success("Colaborador cadastrado com sucesso! Tecle F5")
             
     
-    with tabs[1]:
+    with tabs[2]:
         st.title('Base Colaboradores')
         staff_df, df = read_excel_sheets_from_sharepoint()
 
@@ -221,7 +235,14 @@ def main():
             date_cols = ["Entrada", "Saída", "Atualização"]
             for col in date_cols:
                 if col in df.columns:
-                    df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
+                     df[col] = (
+                                pd.to_datetime(
+                                    df[col],
+                                    format="%d/%m/%Y",   # <- formato explícito
+                                    errors="coerce",
+                                )
+                                .dt.date
+                     )
             
             colunas_selectbox = ["Cargo", "Horário", "Escala", "Turma"] 
 
@@ -326,7 +347,8 @@ def main():
                     st.info("Nenhuma modificação foi detectada. Nada foi salvo.")
                 else:
                     update_colaboradores_sheet(df_atualizado)
-                    st.success("Alterações salvas com sucesso!")
+                    st.cache_data.clear()
+                    st.success("Alterações salvas com sucesso! Tecle F5")
 
 
 
@@ -341,7 +363,13 @@ def main():
             colunas_data = ["Data do Apontamento", "Prazo Para Resolução", "Data de Verificação", "Data Atualização"]
             for col in colunas_data:
                 if col in df.columns:
-                    df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
+                    df[col] = (pd.to_datetime(
+                                df[col],
+                                format="%d/%m/%Y",   # <- formato explícito
+                                errors="coerce",
+                            )
+                            .dt.date
+                    )
             
             selectbox_columns_opcoes = {
                 "Status": [
@@ -384,21 +412,28 @@ def main():
             for col in df.columns:
                 if col in selectbox_columns_opcoes:
                     columns_config[col] = st.column_config.SelectboxColumn(
-                        col,
-                        options=selectbox_columns_opcoes[col],
-                        disabled=False
+                        col, options=selectbox_columns_opcoes[col], disabled=False
                     )
                 elif col in colunas_data:
                     columns_config[col] = st.column_config.DateColumn(
-                        col,
-                        format="DD/MM/YYYY",
-                        disabled=False
+                        col, format="DD/MM/YYYY", disabled=False
                     )
                 else:
                     df[col] = df[col].astype(str).replace("nan", "")
                     columns_config[col] = st.column_config.TextColumn(col, disabled=False)
 
-                    df.index = range(1, len(df) + 1)
+            # garante que as colunas de auditoria existam e não sejam editáveis
+            for audit_col in ["Data Atualização", "Responsável Atualização"]:
+                if audit_col not in df.columns:
+                    df[audit_col] = ""
+            columns_config["Data Atualização"] = st.column_config.DateColumn(
+                "Data Atualização", format="DD/MM/YYYY", disabled=True
+            )
+            columns_config["Responsável Atualização"] = st.column_config.TextColumn(
+                "Responsável Atualização", disabled=True
+            )
+
+            df.index = range(1, len(df) + 1)
 
             df_editado = st.data_editor(
                 df,
@@ -408,9 +443,45 @@ def main():
             )
 
             if st.button("Submeter Edições"):
-                update_sharepoint_file(df_editado)
-                st.success("Alterações salvas com sucesso!")
+                data_atual = datetime.now().strftime("%d/%m/%Y")
 
+                # acessa edited_rows sem alias
+                edited_rows = (
+                    st.session_state
+                    .get("apontamentos", {})
+                    .get("edited_rows", {})
+                )
+
+                if edited_rows:
+                    for idx in edited_rows.keys():        # apenas linhas alteradas
+                        df_editado.loc[idx, "Data Atualização"]       = data_atual
+                        df_editado.loc[idx, "Responsável Atualização"] = "Guilherme Silva"
+
+                    update_sharepoint_file(df_editado)
+                    st.success("Alterações salvas com sucesso!")
+                    st.cache_data.clear()
+                else:
+                    st.info("Nenhuma linha foi editada. Nenhuma alteração foi salva.")
+
+
+    with tabs[1]:
+        st.title("Relação de Vagas")
+        staff_df, _ = read_excel_sheets_from_sharepoint()
+        if staff_df.empty:
+            st.info("Planilha vazia.")
+            st.stop()
+
+        # int to str
+        staff_df["Quantidade Staff"] = staff_df["Quantidade Staff"].astype(str)
+        staff_df.index = range(1, len(staff_df) + 1)
+        edit_staff = st.data_editor(staff_df, num_rows="dynamic", key="editor_staff")
+
+        if st.button("Salvar"):
+            # string to int
+            edit_staff["Quantidade Staff"] = pd.to_numeric(edit_staff["Quantidade Staff"], errors="coerce").fillna(0).astype(int)
+            update_staff_sheet(edit_staff)
+            st.cache_data.clear()
+            st.success("Staff atualizado! Tecle F5")
 
 
 if __name__ == "__main__":
