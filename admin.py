@@ -105,252 +105,261 @@ def update_sharepoint_file(df_editado):
 
 
 # -------------------------------------------------------------------
-# Função principal com o formulário de cadastro
+# Formulário de cadastro
 # -------------------------------------------------------------------
+st.set_page_config(layout="wide")  
+
 def main():
     st.title("📋 Painel ADM")
     tabs = st.tabs(["Apontamentos", "Posições", "Edição Colaboradores", "Cadastrar Colaborador"])
 
     with tabs[3]:
-        st.title("Novo Colaborador")
-        # Lê os dados do Excel com cache
-        staff_df, colaboradores_df = read_excel_sheets_from_sharepoint()
-        
-        if staff_df.empty:
-            st.error("Não foi possível carregar a planilha 'Staff Operações Clínica'.")
-            return
-        
-        # Campos do formulário
-        nome = st.text_input("Nome Completo do colaborador")
-        cpf = st.text_input("CPF ou CNPJ", placeholder="Apenas números")
-        
-        # Para os selects, usamos os valores únicos da planilha de Staff
-        cargos_unicos = sorted(staff_df["Cargo"].unique())
-        cargo = st.selectbox("Cargo", cargos_unicos)
-        
-        escalas_unicas = sorted(staff_df["Escala"].unique())
-        escala = st.selectbox("Escala", escalas_unicas)
-        
-        horarios_unicos = sorted(staff_df["Horário"].unique())
-        horario = st.selectbox("Horário", horarios_unicos)
-        
-        turmas_unicas = sorted(staff_df["Turma"].unique())
-        turma = st.selectbox("Turma", turmas_unicas)
-        
-        registro = st.selectbox("Tipo de Registro", ["Entrada", "Saída", "Atualização"])
-        
-        # Configura as datas conforme o tipo de registro
-        if registro == "Entrada":
-            entrada = st.date_input("Data da Entrada", value=datetime.today(), format='DD/MM/YYYY')
-            saida = None
-            att = None
-        elif registro == "Saída":
-            saida = st.date_input("Data da Saída", value=datetime.today(), format='DD/MM/YYYY')
-            entrada = None
-            att = None
-        else:
-            att = st.date_input("Data da Atualização", value=datetime.today(), format='DD/MM/YYYY')
-            entrada = None
-            saida = None
-        
-        contrato = st.selectbox("Tipo de Contrato", ["CLT", "Autonomo", "Horista"])
-        
-        supervisao = st.text_input("Supervisão Direta")
-        status_prof = st.selectbox("Status do Profissional", 
-                                ["Em Treinamento", "Apto", "Afastado", "Desistiu antes do onboarding"])
-        responsavel = st.text_input("Responsável pela Inclusão dos dados")
-        
-        if st.button("Enviar"):
-            # Validação dos campos obrigatórios
-            if not nome.strip() or not cpf.strip() or not supervisao.strip() or not responsavel.strip():
-                st.error("Preencha os campos obrigatórios: Nome, CPF/CNPJ, Supervisão Direta e Responsável.")
-                return
-
-            # Verifica se a combinação (Escala, Horário, Turma, Cargo) existe na aba de Staff
-            filtro_staff = staff_df[
-                (staff_df["Escala"] == escala) &
-                (staff_df["Horário"] == horario) &
-                (staff_df["Turma"] == turma) &
-                (staff_df["Cargo"] == cargo)
-            ]
-            if filtro_staff.empty:
-                st.error("Essa combinação de Escala / Horário / Turma / Cargo não existe na planilha base.")
-                return
-
-            # Pega a quantidade máxima permitida para essa combinação
-            max_colabs = int(filtro_staff["Quantidade Staff"].iloc[0])
-
-            # Conta quantos colaboradores já foram cadastrados para essa combinação
-            filtro_colab = colaboradores_df[
-                (colaboradores_df["Escala"] == escala) &
-                (colaboradores_df["Horário"] == horario) &
-                (colaboradores_df["Turma"] == turma) &
-                (colaboradores_df["Cargo"] == cargo)
-            ]
-            if filtro_colab.shape[0] >= max_colabs:
-                st.error(f"Limite de colaboradores atingido para essa combinação: {max_colabs}")
-                return
-
-            # Verifica duplicidade de CPF
-            if cpf in colaboradores_df["CPF ou CNPJ"].astype(str).values:
-                st.error("Já existe um colaborador cadastrado com este CPF/CNPJ.")
-                return
-
-            # Se chegou aqui, todos os checks passaram
-            data_formatada = datetime.today().strftime("%d/%m/%Y")
-            novo_colaborador = {
-                "Nome Completo do Profissional": nome,
-                "CPF ou CNPJ": cpf,
-                "Cargo": cargo,
-                "Escala": escala,
-                "Horário": horario,
-                "Turma": turma,
-                "Tipo de Registro": registro,
-                "Entrada": entrada,
-                "Saída": saida,
-                "Atualização": att,
-                "Tipo de Contrato": contrato,
-                "Supervisão Direta": supervisao,
-                "Status do Profissional": status_prof,
-                "Responsável pela Inclusão dos dados": responsavel,
-                "CreatedAt": data_formatada
-            }
-            novo_df = pd.DataFrame([novo_colaborador])
-            colaboradores_df = pd.concat([colaboradores_df, novo_df], ignore_index=True)
-
-            # Atualiza a aba "Colaboradores" no Excel do SharePoint
-            update_colaboradores_sheet(colaboradores_df)
-            st.cache_data.clear()
-            st.success("Colaborador cadastrado com sucesso! Tecle F5")
+        spacer_left, main, spacer_right = st.columns([1, 4, 1])
+        with main:
+            st.title("Novo Colaborador")
+            # Lê os dados do Excel com cache
+            staff_df, colaboradores_df = read_excel_sheets_from_sharepoint()
             
-    
-    with tabs[2]:
-        st.title('Base Colaboradores')
-        staff_df, df = read_excel_sheets_from_sharepoint()
-
-        if df.empty:
-            st.info("Não há colaboradores na base")
-        else:
-            # Colunas que devem ser interpretadas como datas
-            date_cols = ["Entrada", "Saída", "Atualização"]
-            for col in date_cols:
-                if col in df.columns:
-                     df[col] = (
-                                pd.to_datetime(
-                                    df[col],
-                                    format="%d/%m/%Y",   # <- formato explícito
-                                    errors="coerce",
-                                )
-                                .dt.date
-                     )
+            if staff_df.empty:
+                st.error("Não foi possível carregar a planilha 'Staff Operações Clínica'.")
+                return
             
-            colunas_selectbox = ["Cargo", "Horário", "Escala", "Turma"] 
+            # Campos do formulário
+            nome = st.text_input("Nome Completo do colaborador")
+            cpf = st.text_input("CPF ou CNPJ", placeholder="Apenas números")
+            
+            # Para os selects, usamos os valores únicos da planilha de Staff
+            cargos_unicos = sorted(staff_df["Cargo"].unique())
+            cargo = st.selectbox("Cargo", cargos_unicos)
+            
+            escalas_unicas = sorted(staff_df["Escala"].unique())
+            escala = st.selectbox("Escala", escalas_unicas)
+            
+            horarios_unicos = sorted(staff_df["Horário"].unique())
+            horario = st.selectbox("Horário", horarios_unicos)
+            
+            turmas_unicas = sorted(staff_df["Turma"].unique())
+            turma = st.selectbox("Turma", turmas_unicas)
+            
+            registro = st.selectbox("Tipo de Registro", ["Entrada", "Saída", "Atualização"])
+            
+            # Configura as datas conforme o tipo de registro
+            if registro == "Entrada":
+                entrada = st.date_input("Data da Entrada", value=datetime.today(), format='DD/MM/YYYY')
+                saida = None
+                att = None
+            elif registro == "Saída":
+                saida = st.date_input("Data da Saída", value=datetime.today(), format='DD/MM/YYYY')
+                entrada = None
+                att = None
+            else:
+                att = st.date_input("Data da Atualização", value=datetime.today(), format='DD/MM/YYYY')
+                entrada = None
+                saida = None
+            
+            contrato = st.selectbox("Tipo de Contrato", ["CLT", "Autonomo", "Horista"])
+            
+            supervisao = st.text_input("Supervisão Direta")
+            status_prof = st.selectbox("Status do Profissional", 
+                                    ["Em Treinamento", "Apto", "Afastado", "Desistiu antes do onboarding"])
+            responsavel = st.text_input("Responsável pela Inclusão dos dados")
+            
+            if st.button("Enviar"):
+                # Validação dos campos obrigatórios
+                if not nome.strip() or not cpf.strip() or not supervisao.strip() or not responsavel.strip():
+                    st.error("Preencha os campos obrigatórios: Nome, CPF/CNPJ, Supervisão Direta e Responsável.")
+                    return
 
-            selectbox_columns_opcoes = {
-                col: sorted(staff_df[col].dropna().astype(str).unique().tolist())
-                for col in colunas_selectbox if col in staff_df.columns
-            }
-        # Trata colunas com NaN e define tipos apropriados para o editor
-            columns_config = {}
-            for col in df.columns:
-                if col in selectbox_columns_opcoes:
-                    columns_config[col] = st.column_config.SelectboxColumn(
-                        col,
-                        options=selectbox_columns_opcoes[col],
-                        disabled=False
-                    )
-                elif col in date_cols:
-                    columns_config[col] = st.column_config.DateColumn(
-                        col,
-                        format="DD/MM/YYYY",
-                        disabled=False
-                    )
-                else:
-                    df[col] = df[col].astype(str).replace("nan", "")
-                    columns_config[col] = st.column_config.TextColumn(col, disabled=False)
+                # Verifica se a combinação (Escala, Horário, Turma, Cargo) existe na aba de Staff
+                filtro_staff = staff_df[
+                    (staff_df["Escala"] == escala) &
+                    (staff_df["Horário"] == horario) &
+                    (staff_df["Turma"] == turma) &
+                    (staff_df["Cargo"] == cargo)
+                ]
+                if filtro_staff.empty:
+                    st.error("Essa combinação de Escala / Horário / Turma / Cargo não existe na planilha base.")
+                    return
 
-                    df.index = range(1, len(df) + 1)
+                # Pega a quantidade máxima permitida para essa combinação
+                max_colabs = int(filtro_staff["Quantidade Staff"].iloc[0])
 
-            df_editado = st.data_editor(
-                df,
-                column_config=columns_config,
-                num_rows="fixed",
-                key="colaboradores"
-            )
+                # Conta quantos colaboradores já foram cadastrados para essa combinação
+                filtro_colab = colaboradores_df[
+                    (colaboradores_df["Escala"] == escala) &
+                    (colaboradores_df["Horário"] == horario) &
+                    (colaboradores_df["Turma"] == turma) &
+                    (colaboradores_df["Cargo"] == cargo)
+                ]
+                if filtro_colab.shape[0] >= max_colabs:
+                    st.error(f"Limite de colaboradores atingido para essa combinação: {max_colabs}")
+                    return
 
-            if st.button("Salvar Modificações"):
-                erros = []
-                df_atualizado = df.copy()
-                hoje_formatado = datetime.today().strftime("%d/%m/%Y")
-                alguma_linha_modificada = False
+                # Verifica duplicidade de CPF
+                if cpf in colaboradores_df["CPF ou CNPJ"].astype(str).values:
+                    st.error("Já existe um colaborador cadastrado com este CPF/CNPJ.")
+                    return
 
-                for idx, row in df_editado.iterrows():
-                    original_row = df.loc[idx]
-                    alterado = False
+                # Se chegou aqui, todos os checks passaram
+                data_formatada = datetime.today().strftime("%d/%m/%Y")
+                novo_colaborador = {
+                    "Nome Completo do Profissional": nome,
+                    "CPF ou CNPJ": cpf,
+                    "Cargo": cargo,
+                    "Escala": escala,
+                    "Horário": horario,
+                    "Turma": turma,
+                    "Tipo de Registro": registro,
+                    "Entrada": entrada,
+                    "Saída": saida,
+                    "Atualização": att,
+                    "Tipo de Contrato": contrato,
+                    "Supervisão Direta": supervisao,
+                    "Status do Profissional": status_prof,
+                    "Responsável pela Inclusão dos dados": responsavel,
+                    "CreatedAt": data_formatada
+                }
+                novo_df = pd.DataFrame([novo_colaborador])
+                colaboradores_df = pd.concat([colaboradores_df, novo_df], ignore_index=True)
 
-                    cpf = str(row.get("CPF ou CNPJ", "")).strip()
-                    cargo = row.get("Cargo", "").strip()
-                    escala = row.get("Escala", "").strip()
-                    horario = row.get("Horário", "").strip()
-                    turma = row.get("Turma", "").strip()
+                # Atualiza a aba "Colaboradores" no Excel do SharePoint
+                update_colaboradores_sheet(colaboradores_df)
+                st.cache_data.clear()
+                st.success("Colaborador cadastrado com sucesso! Tecle F5")
 
-                    # Verifica se a combinação existe na planilha de staff
-                    filtro_staff = staff_df[
-                        (staff_df["Cargo"] == cargo) &
-                        (staff_df["Escala"] == escala) &
-                        (staff_df["Horário"] == horario) &
-                        (staff_df["Turma"] == turma)
-                    ]
+# --------------------------------------------------------------------
+# Edição de colaboradores
+# --------------------------------------------------------------------
+        
+        with tabs[2]:
+            st.title('Base Colaboradores')
+            staff_df, df = read_excel_sheets_from_sharepoint()
 
-                    if filtro_staff.empty:
-                        erros.append(f"❌ Linha {idx}: combinação inválida de Cargo / Escala / Horário / Turma.")
-                        continue
-
-                    # Verifica se há CPF duplicado (ignorando a própria linha)
-                    cpfs_sem_atual = df_editado.drop(index=idx)["CPF ou CNPJ"].astype(str).tolist()
-                    if cpf in cpfs_sem_atual:
-                        erros.append(f"❌ Linha {idx}: CPF/CNPJ duplicado: {cpf}.")
-
-                    # Verifica se o limite de colaboradores foi excedido
-                    max_colabs = int(filtro_staff["Quantidade Staff"].iloc[0])
-                    filtro_colab = df_editado[
-                        (df_editado["Escala"] == escala) &
-                        (df_editado["Horário"] == horario) &
-                        (df_editado["Turma"] == turma) &
-                        (df_editado["Cargo"] == cargo)
-                    ]
-                    count_atual = filtro_colab.shape[0]
-                    if count_atual > max_colabs:
-                        erros.append(
-                            f"❌ Linha {idx}: limite de colaboradores excedido para a combinação:<br>"
-                            f"• {cargo} / {escala} / {horario} / {turma} — máximo permitido: {max_colabs}."
+            if df.empty:
+                st.info("Não há colaboradores na base")
+            else:
+                # Colunas que devem ser interpretadas como datas
+                date_cols = ["Entrada", "Saída", "Atualização"]
+                for col in date_cols:
+                    if col in df.columns:
+                        df[col] = (
+                                    pd.to_datetime(
+                                        df[col],
+                                        format="%d/%m/%Y",   # <- formato explícito
+                                        errors="coerce",
+                                    )
+                                    .dt.date
                         )
+                
+                colunas_selectbox = ["Cargo", "Horário", "Escala", "Turma"] 
 
-                    # Verifica se a linha foi alterada
-                    for col in df.columns:
-                        val_antigo = str(original_row.get(col, "")).strip()
-                        val_novo = str(row.get(col, "")).strip()
-                        if val_antigo != val_novo:
-                            alterado = True
-                            break
+                selectbox_columns_opcoes = {
+                    col: sorted(staff_df[col].dropna().astype(str).unique().tolist())
+                    for col in colunas_selectbox if col in staff_df.columns
+                }
+            # Trata colunas com NaN e define tipos apropriados para o editor
+                columns_config = {}
+                for col in df.columns:
+                    if col in selectbox_columns_opcoes:
+                        columns_config[col] = st.column_config.SelectboxColumn(
+                            col,
+                            options=selectbox_columns_opcoes[col],
+                            disabled=False
+                        )
+                    elif col in date_cols:
+                        columns_config[col] = st.column_config.DateColumn(
+                            col,
+                            format="DD/MM/YYYY",
+                            disabled=False
+                        )
+                    else:
+                        df[col] = df[col].astype(str).replace("nan", "")
+                        columns_config[col] = st.column_config.TextColumn(col, disabled=False)
 
-                    if alterado:
-                        alguma_linha_modificada = True
-                        df_atualizado.loc[idx] = row
-                        df_atualizado.at[idx, "Atualização"] = hoje_formatado
+                        df.index = range(1, len(df) + 1)
 
-                if erros:
-                    st.error("⚠️ Não foi possível salvar devido aos seguintes problemas:")
-                    for e in erros:
-                        st.markdown(f"- {e}", unsafe_allow_html=True)
-                elif not alguma_linha_modificada:
-                    st.info("Nenhuma modificação foi detectada. Nada foi salvo.")
-                else:
-                    update_colaboradores_sheet(df_atualizado)
-                    st.cache_data.clear()
-                    st.success("Alterações salvas com sucesso! Tecle F5")
+                df_editado = st.data_editor(
+                    df,
+                    column_config=columns_config,
+                    num_rows="fixed",
+                    key="colaboradores"
+                )
 
+                if st.button("Salvar Modificações"):
+                    erros = []
+                    df_atualizado = df.copy()
+                    hoje_formatado = datetime.today().strftime("%d/%m/%Y")
+                    alguma_linha_modificada = False
 
+                    for idx, row in df_editado.iterrows():
+                        original_row = df.loc[idx]
+                        alterado = False
+
+                        cpf = str(row.get("CPF ou CNPJ", "")).strip()
+                        cargo = row.get("Cargo", "").strip()
+                        escala = row.get("Escala", "").strip()
+                        horario = row.get("Horário", "").strip()
+                        turma = row.get("Turma", "").strip()
+
+                        # Verifica se a combinação existe na planilha de staff
+                        filtro_staff = staff_df[
+                            (staff_df["Cargo"] == cargo) &
+                            (staff_df["Escala"] == escala) &
+                            (staff_df["Horário"] == horario) &
+                            (staff_df["Turma"] == turma)
+                        ]
+
+                        if filtro_staff.empty:
+                            erros.append(f"❌ Linha {idx}: combinação inválida de Cargo / Escala / Horário / Turma.")
+                            continue
+
+                        # Verifica se há CPF duplicado (ignorando a própria linha)
+                        cpfs_sem_atual = df_editado.drop(index=idx)["CPF ou CNPJ"].astype(str).tolist()
+                        if cpf in cpfs_sem_atual:
+                            erros.append(f"❌ Linha {idx}: CPF/CNPJ duplicado: {cpf}.")
+
+                        # Verifica se o limite de colaboradores foi excedido
+                        max_colabs = int(filtro_staff["Quantidade Staff"].iloc[0])
+                        filtro_colab = df_editado[
+                            (df_editado["Escala"] == escala) &
+                            (df_editado["Horário"] == horario) &
+                            (df_editado["Turma"] == turma) &
+                            (df_editado["Cargo"] == cargo)
+                        ]
+                        count_atual = filtro_colab.shape[0]
+                        if count_atual > max_colabs:
+                            erros.append(
+                                f"❌ Linha {idx}: limite de colaboradores excedido para a combinação:<br>"
+                                f"• {cargo} / {escala} / {horario} / {turma} — máximo permitido: {max_colabs}."
+                            )
+
+                        # Verifica se a linha foi alterada
+                        for col in df.columns:
+                            val_antigo = str(original_row.get(col, "")).strip()
+                            val_novo = str(row.get(col, "")).strip()
+                            if val_antigo != val_novo:
+                                alterado = True
+                                break
+
+                        if alterado:
+                            alguma_linha_modificada = True
+                            df_atualizado.loc[idx] = row
+                            df_atualizado.at[idx, "Atualização"] = hoje_formatado
+
+                    if erros:
+                        st.error("⚠️ Não foi possível salvar devido aos seguintes problemas:")
+                        for e in erros:
+                            st.markdown(f"- {e}", unsafe_allow_html=True)
+                    elif not alguma_linha_modificada:
+                        st.info("Nenhuma modificação foi detectada. Nada foi salvo.")
+                    else:
+                        update_colaboradores_sheet(df_atualizado)
+                        st.cache_data.clear()
+                        st.success("Alterações salvas com sucesso! Tecle F5")
+
+# --------------------------------------------------------------------
+# Edição apontamentos        
+# --------------------------------------------------------------------
 
     
     with tabs[0]:
@@ -458,11 +467,14 @@ def main():
                         df_editado.loc[idx, "Responsável Atualização"] = "Guilherme Silva"
 
                     update_sharepoint_file(df_editado)
-                    st.success("Alterações salvas com sucesso!")
+                    st.success("Alterações salvas com sucesso! Tecle F5")
                     st.cache_data.clear()
                 else:
                     st.info("Nenhuma linha foi editada. Nenhuma alteração foi salva.")
 
+#---------------------------------------------------------------------
+# Edição de Staff
+#---------------------------------------------------------------------
 
     with tabs[1]:
         st.title("Relação de Vagas")
