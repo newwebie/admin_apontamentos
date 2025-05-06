@@ -48,7 +48,18 @@ def update_staff_sheet(staff_df):
         name   = file_name.split("/")[-1]
         ctx.web.get_folder_by_server_relative_url(folder).upload_file(name, out.read()).execute_query()
     except Exception as e:
-        st.error(f"Erro ao atualizar Staff: {e}")
+        locked = (
+            getattr(e, "response_status", None) == 423        # HTTP 423 Locked
+            or "-2147018894" in str(e)                       # SPFileLockException
+            or "lock" in str(e).lower()                      # texto contém “lock”
+        )
+        if locked:
+            st.warning(
+                "Não foi possível salvar: o arquivo base está aberto em uma máquina."
+                "Feche-o no Excel/SharePoint ou tente novamente mais tarde."
+                )
+        else:
+            st.error(f"Erro ao atualizar a planilha de colaboradores no SharePoint: {e}")
 
 def update_colaboradores_sheet(colaboradores_df):
     try:
@@ -71,9 +82,21 @@ def update_colaboradores_sheet(colaboradores_df):
         target_folder = ctx.web.get_folder_by_server_relative_url(folder_path)
         target_folder.upload_file(file_name_only, file_content).execute_query()
         st.cache_data.clear()
-        st.success("Para ver as mudanças ou submeter novas alterações, tecle F5")
+        st.success("Alterações submetidas com sucesso!")
     except Exception as e:
-        st.error(f"Erro ao atualizar a planilha de colaboradores no SharePoint: {e}")
+        locked = (
+            getattr(e, "response_status", None) == 423        # HTTP 423 Locked
+            or "-2147018894" in str(e)                       # SPFileLockException
+            or "lock" in str(e).lower()                      # texto contém “lock”
+        )
+        if locked:
+            st.warning(
+                "Não foi possível salvar: o arquivo base está aberto em uma máquina."
+                "Feche-o no Excel/SharePoint ou tente novamente mais tarde."
+                )
+        else:
+            st.error(f"Erro ao atualizar a planilha de colaboradores no SharePoint: {e}")
+
 
 @st.cache_data
 def get_sharepoint_file():
@@ -90,8 +113,9 @@ def get_sharepoint_file():
 def update_sharepoint_file(df_editado):
     try:
         ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
+
         output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
             df_editado.to_excel(writer, index=False)
         output.seek(0)
         file_content = output.read()
@@ -100,8 +124,22 @@ def update_sharepoint_file(df_editado):
         file_name_only = apontamentos_file.split("/")[-1]
         target_folder = ctx.web.get_folder_by_server_relative_url(folder_path)
         target_folder.upload_file(file_name_only, file_content).execute_query()
+        st.success("Apontamentos atualizados com sucesso!")
+
+    # 👇 só trata o caso “arquivo bloqueado/aberto”; deixa o resto como está
     except Exception as e:
-        st.error(f"Erro ao salvar o arquivo de apontamentos: {e}")
+        locked = (
+            getattr(e, "response_status", None) == 423       # HTTP 423 Locked
+            or "-2147018894" in str(e)                      # SPFileLockException
+            or "lock" in str(e).lower()                     # texto contém “lock”
+        )
+        if locked:
+            st.warning(
+                "Não foi possível salvar: o arquivo está aberto ou bloqueado.\n"
+                "Feche-o no Excel/SharePoint e tente novamente mais tarde."
+            )
+        else:
+            st.error(f"Erro ao salvar o arquivo de apontamentos: {e}")
 
 
 # -------------------------------------------------------------------
@@ -111,12 +149,12 @@ st.set_page_config(layout="wide")
 
 def main():
     st.title("📋 Painel ADM")
-    tabs = st.tabs(["Apontamentos", "Posições", "Edição Colaboradores", "Cadastrar Colaborador"])
+    tabs = st.tabs(["Apontamentos", "Posições", "Edição Colaboradores", "Registrar Colaborador"])
 
     with tabs[3]:
-        spacer_left, main, spacer_right = st.columns([1, 4, 1])
+        spacer_left, main, spacer_right = st.columns([2, 4, 2])
         with main:
-            st.title("Novo Colaborador")
+            st.title("Cadastrar ou Atualizar Colaborador")
             # Lê os dados do Excel com cache
             staff_df, colaboradores_df = read_excel_sheets_from_sharepoint()
             
@@ -126,7 +164,7 @@ def main():
             
             # Campos do formulário
             nome = st.text_input("Nome Completo do colaborador")
-            cpf = st.text_input("CPF ou CNPJ", placeholder="Apenas números")
+            #cpf = st.text_input("CPF ou CNPJ", placeholder="Apenas números")
             
             # Para os selects, usamos os valores únicos da planilha de Staff
             cargos_unicos = sorted(staff_df["Cargo"].unique())
@@ -156,18 +194,23 @@ def main():
                 att = st.date_input("Data da Atualização", value=datetime.today(), format='DD/MM/YYYY')
                 entrada = None
                 saida = None
+
+            if registro == "saida":
+                ativo = "Não"
+            else:
+                ativo = "Sim"
             
             contrato = st.selectbox("Tipo de Contrato", ["CLT", "Autonomo", "Horista"])
             
             supervisao = st.text_input("Supervisão Direta")
             status_prof = st.selectbox("Status do Profissional", 
-                                    ["Em Treinamento", "Apto", "Afastado", "Desistiu antes do onboarding"])
+                                    ["Em Treinamento", "Apto", "Afastado", "Desistiu antes do onboarding", "Desligado"])
             responsavel = st.text_input("Responsável pela Inclusão dos dados")
             
             if st.button("Enviar"):
                 # Validação dos campos obrigatórios
-                if not nome.strip() or not cpf.strip() or not supervisao.strip() or not responsavel.strip():
-                    st.error("Preencha os campos obrigatórios: Nome, CPF/CNPJ, Supervisão Direta e Responsável.")
+                if not nome.strip() or not supervisao.strip() or not responsavel.strip():
+                    st.error("Preencha os campos obrigatórios: Nome, Supervisão Direta e Responsável.")
                     return
 
                 # Verifica se a combinação (Escala, Horário, Turma, Cargo) existe na aba de Staff
@@ -196,15 +239,15 @@ def main():
                     return
 
                 # Verifica duplicidade de CPF
-                if cpf in colaboradores_df["CPF ou CNPJ"].astype(str).values:
-                    st.error("Já existe um colaborador cadastrado com este CPF/CNPJ.")
-                    return
+               #if cpf in colaboradores_df["CPF ou CNPJ"].astype(str).values:
+                    #st.error("Já existe um colaborador cadastrado com este CPF/CNPJ.")
+                    #return
 
                 # Se chegou aqui, todos os checks passaram
                 data_formatada = datetime.today().strftime("%d/%m/%Y")
                 novo_colaborador = {
                     "Nome Completo do Profissional": nome,
-                    "CPF ou CNPJ": cpf,
+                    #"CPF ou CNPJ": cpf,
                     "Cargo": cargo,
                     "Escala": escala,
                     "Horário": horario,
@@ -217,15 +260,43 @@ def main():
                     "Supervisão Direta": supervisao,
                     "Status do Profissional": status_prof,
                     "Responsável pela Inclusão dos dados": responsavel,
-                    "CreatedAt": data_formatada
+                    "Criado em": data_formatada,
+                    "Ativo": ativo
                 }
-                novo_df = pd.DataFrame([novo_colaborador])
-                colaboradores_df = pd.concat([colaboradores_df, novo_df], ignore_index=True)
+                
+                if registro == "Entrada":
+                    # ➕ adiciona
+                    colaboradores_df = pd.concat(
+                        [colaboradores_df, pd.DataFrame([novo_colaborador])],
+                        ignore_index=True
+                    )
+                else:
+                    # 🔄 atualiza / saída
+                    mask = (
+                        colaboradores_df["Nome Completo do Profissional"]
+                        .str.strip().str.casefold()
+                        == nome.strip().casefold()
+                    )
 
-                # Atualiza a aba "Colaboradores" no Excel do SharePoint
+                    if not mask.any():
+                        st.error("Nenhum colaborador encontrado com esse nome para atualizar / registrar saída.")
+                        st.stop()
+
+                    if mask.sum() > 1:
+                        st.error("Há mais de um colaborador com esse nome. Por favor, especifique melhor.")
+                        st.stop()
+
+                    # atualiza apenas colunas cujo valor não é None
+                    for col, val in novo_colaborador.items():
+                        if val is not None:
+                            colaboradores_df.loc[mask, col] = val
+                    
+                    if registro == "Saída":
+                        colaboradores_df.loc[mask, "Ativo"] = "Não"
+
+                # 5️⃣  Salva de volta no SharePoint, limpa cache e avisa
                 update_colaboradores_sheet(colaboradores_df)
                 st.cache_data.clear()
-                st.success("Colaborador cadastrado com sucesso! Tecle F5")
 
 # --------------------------------------------------------------------
 # Edição de colaboradores
@@ -239,7 +310,7 @@ def main():
                 st.info("Não há colaboradores na base")
             else:
                 # Colunas que devem ser interpretadas como datas
-                date_cols = ["Entrada", "Saída", "Atualização"]
+                date_cols = ["Entrada", "Saída", "Atualização", "Cirado em"]
                 for col in date_cols:
                     if col in df.columns:
                         df[col] = (
@@ -281,11 +352,11 @@ def main():
                 df_editado = st.data_editor(
                     df,
                     column_config=columns_config,
-                    num_rows="fixed",
+                    num_rows="dynamic",
                     key="colaboradores"
                 )
 
-                if st.button("Salvar Modificações"):
+                if st.button("Salvar "):
                     erros = []
                     df_atualizado = df.copy()
                     hoje_formatado = datetime.today().strftime("%d/%m/%Y")
@@ -295,7 +366,7 @@ def main():
                         original_row = df.loc[idx]
                         alterado = False
 
-                        cpf = str(row.get("CPF ou CNPJ", "")).strip()
+                        #cpf = str(row.get("CPF ou CNPJ", "")).strip()
                         cargo = row.get("Cargo", "").strip()
                         escala = row.get("Escala", "").strip()
                         horario = row.get("Horário", "").strip()
@@ -314,9 +385,9 @@ def main():
                             continue
 
                         # Verifica se há CPF duplicado (ignorando a própria linha)
-                        cpfs_sem_atual = df_editado.drop(index=idx)["CPF ou CNPJ"].astype(str).tolist()
-                        if cpf in cpfs_sem_atual:
-                            erros.append(f"❌ Linha {idx}: CPF/CNPJ duplicado: {cpf}.")
+                        #cpfs_sem_atual = df_editado.drop(index=idx)["CPF ou CNPJ"].astype(str).tolist()
+                        #if cpf in cpfs_sem_atual:
+                            #erros.append(f"❌ Linha {idx}: CPF/CNPJ duplicado: {cpf}.")
 
                         # Verifica se o limite de colaboradores foi excedido
                         max_colabs = int(filtro_staff["Quantidade Staff"].iloc[0])
@@ -351,36 +422,72 @@ def main():
                         for e in erros:
                             st.markdown(f"- {e}", unsafe_allow_html=True)
                     elif not alguma_linha_modificada:
-                        st.info("Nenhuma modificação foi detectada. Nada foi salvo.")
+                        st.toast("Nenhuma modificação foi detectada. Nada foi salvo.")
                     else:
                         update_colaboradores_sheet(df_atualizado)
                         st.cache_data.clear()
-                        st.success("Alterações salvas com sucesso! Tecle F5")
 
 # --------------------------------------------------------------------
 # Edição apontamentos        
 # --------------------------------------------------------------------
 
     
-    with tabs[0]:
-        st.title("Lista de Apontamentos")
-        df = get_sharepoint_file()
+        with tabs[0]:
+            st.title("Lista de Apontamentos")
+            df = get_sharepoint_file()
 
-        if df.empty:
-            st.info("Nenhum apontamento encontrado!")
-        else:
-            colunas_data = ["Data do Apontamento", "Prazo Para Resolução", "Data de Verificação", "Data Atualização"]
-            for col in colunas_data:
-                if col in df.columns:
-                    df[col] = (pd.to_datetime(
-                                df[col],
-                                format="%d/%m/%Y",   # <- formato explícito
-                                errors="coerce",
-                            )
+            if df.empty:
+                st.info("Nenhum apontamento encontrado!")
+            else:
+                # -------------------------------------------------
+                # 1️⃣  Conversão das colunas de data
+                # -------------------------------------------------
+                colunas_data = [
+                    "Data do Apontamento",
+                    "Prazo Para Resolução",
+                    "Data de Verificação",
+                    "Data Atualização",
+                ]
+                for col in colunas_data:
+                    if col in df.columns:
+                        df[col] = (
+                            pd.to_datetime(df[col], format="%d/%m/%Y", errors="coerce")
                             .dt.date
+                        )
+
+                # -------------------------------------------------
+                # 2️⃣  Botão-toggle para PENDENTE × Todos
+                # -------------------------------------------------
+                def toggle_pendentes():
+                    st.session_state.show_pending = not st.session_state.get(
+                        "show_pending", False
                     )
-            
-            selectbox_columns_opcoes = {
+
+                # chave default
+                st.session_state.setdefault("show_pending", False)
+
+                label_btn = (
+                    "🔍  Filtrar Pendentes"
+                    if not st.session_state.show_pending
+                    else "📄  Mostrar todos"
+                )
+
+                st.button(
+                    label_btn,
+                    key="btn_toggle_pendentes",
+                    on_click=toggle_pendentes,
+                )
+
+                # DataFrame que será mostrado
+                if st.session_state.show_pending:
+                    df_view = df[df["Status"] == "PENDENTE"].copy()
+                else:
+                    df_view = df.copy()
+
+                # -------------------------------------------------
+                # 3️⃣  Configura colunas (idêntico, mas usa df_view)
+                # -------------------------------------------------
+                selectbox_columns_opcoes = {
                 "Status": [
                     "REALIZADO DURANTE A CONDUÇÃO", "REALIZADO", "VERIFICANDO", "PENDENTE", "NÃO APLICÁVEL"
                 ],
@@ -415,62 +522,94 @@ def main():
                 "Grau De Criticidade Do Apontamento": [
                     "Baixo", "Médio", "Alto"
                 ],
-            }
+                }
 
-            columns_config = {}
-            for col in df.columns:
-                if col in selectbox_columns_opcoes:
-                    columns_config[col] = st.column_config.SelectboxColumn(
-                        col, options=selectbox_columns_opcoes[col], disabled=False
-                    )
-                elif col in colunas_data:
-                    columns_config[col] = st.column_config.DateColumn(
-                        col, format="DD/MM/YYYY", disabled=False
-                    )
-                else:
-                    df[col] = df[col].astype(str).replace("nan", "")
-                    columns_config[col] = st.column_config.TextColumn(col, disabled=False)
 
-            # garante que as colunas de auditoria existam e não sejam editáveis
-            for audit_col in ["Data Atualização", "Responsável Atualização"]:
-                if audit_col not in df.columns:
-                    df[audit_col] = ""
-            columns_config["Data Atualização"] = st.column_config.DateColumn(
-                "Data Atualização", format="DD/MM/YYYY", disabled=True
-            )
-            columns_config["Responsável Atualização"] = st.column_config.TextColumn(
-                "Responsável Atualização", disabled=True
-            )
+                columns_config = {}
+                for col in df_view.columns:
+                    if col in selectbox_columns_opcoes:
+                        columns_config[col] = st.column_config.SelectboxColumn(
+                            col, options=selectbox_columns_opcoes[col], disabled=False
+                        )
+                    elif col in colunas_data:
+                        columns_config[col] = st.column_config.DateColumn(
+                            col, format="DD/MM/YYYY", disabled=False
+                        )
+                    else:
+                        df_view[col] = df_view[col].astype(str).replace("nan", "")
+                        columns_config[col] = st.column_config.TextColumn(col, disabled=False)
 
-            df.index = range(1, len(df) + 1)
-
-            df_editado = st.data_editor(
-                df,
-                column_config=columns_config,
-                num_rows="fixed",
-                key="apontamentos"
-            )
-
-            if st.button("Submeter Edições"):
-                data_atual = datetime.now().strftime("%d/%m/%Y")
-
-                # acessa edited_rows sem alias
-                edited_rows = (
-                    st.session_state
-                    .get("apontamentos", {})
-                    .get("edited_rows", {})
+                # colunas Não editáveis Responsável, Data Atualização e ID
+                for audit_col in ["Data Atualização", "Responsável Atualização"]:
+                    if audit_col not in df_view.columns:
+                        df_view[audit_col] = ""
+                columns_config["Data Atualização"] = st.column_config.DateColumn(
+                    "Data Atualização", format="DD/MM/YYYY", disabled=True
                 )
+                columns_config["Responsável Atualização"] = st.column_config.TextColumn(
+                    "Responsável Atualização", disabled=True
+                )
+                columns_config["_index"] = st.column_config.TextColumn("ID", disabled=True)
 
-                if edited_rows:
-                    for idx in edited_rows.keys():        # apenas linhas alteradas
-                        df_editado.loc[idx, "Data Atualização"]       = data_atual
-                        df_editado.loc[idx, "Responsável Atualização"] = "Guilherme Silva"
+                # -------------------------------------------------
+                # 4️⃣  Índice real para salvar depois
+                # -------------------------------------------------
+                columns_config["orig_idx"] = st.column_config.NumberColumn(
+                    "orig_idx", disabled=True, 
+                )
+                columns_config["orig_idx"] = None
+    
+                snapshot = df_view.copy(deep=True)            # foto imutável
 
-                    update_sharepoint_file(df_editado)
-                    st.success("Alterações salvas com sucesso! Tecle F5")
-                    st.cache_data.clear()
-                else:
-                    st.info("Nenhuma linha foi editada. Nenhuma alteração foi salva.")
+                with st.form("grade"):
+                    df_editado = st.data_editor(
+                        snapshot,
+                        column_config=columns_config,
+                        num_rows="dynamic",
+                        key="apontamentos",
+                    )
+                    submitted = st.form_submit_button("Submeter Edições")
+
+                # -------------------------------------------------
+                # 5️⃣ Grava só se algo mudou
+                # -------------------------------------------------
+                if submitted:
+                    data_atual = datetime.now()
+                    cols_cmp = [c for c in snapshot.columns if c != "orig_idx"]
+
+                    # 0️⃣: nada mudou → sai cedo
+                    if snapshot[cols_cmp].equals(df_editado[cols_cmp]):
+                        st.toast("Nenhuma linha foi editada. Nada foi salvo.")
+                        st.stop()
+
+                    # 1️⃣: linhas realmente alteradas
+                    cmp_orig = snapshot[cols_cmp].fillna(pd.NA)
+                    cmp_edit = df_editado[cols_cmp].fillna(pd.NA)
+                    diff_mask = cmp_orig.ne(cmp_edit).any(axis=1)
+                    linhas_alteradas = df_editado.loc[diff_mask]
+
+                    houve_modificacao_no_arquivo = False
+
+                    # 2️⃣: aplica mudanças
+                    for _, row in linhas_alteradas.iterrows():
+                        orig_idx = int(row["orig_idx"])
+                        mudou = not df.loc[orig_idx, cols_cmp]\
+                                    .fillna(pd.NA)\
+                                    .equals(row[cols_cmp].fillna(pd.NA))
+
+                        if mudou:
+                            houve_modificacao_no_arquivo = True
+                            df.loc[orig_idx, cols_cmp] = row[cols_cmp].values
+                            df.loc[orig_idx, "Data Atualização"]        = data_atual
+                            df.loc[orig_idx, "Responsável Atualização"] = "Guilherme Silva"
+
+                    # 3️⃣: decide se salva
+                    if houve_modificacao_no_arquivo:
+                        update_sharepoint_file(df)
+                        st.cache_data.clear()
+                    else:
+                        st.toast("Os valores editados eram idênticos aos já gravados. Nada foi salvo.")
+
 
 #---------------------------------------------------------------------
 # Edição de Staff
@@ -478,22 +617,57 @@ def main():
 
     with tabs[1]:
         st.title("Relação de Vagas")
-        staff_df, _ = read_excel_sheets_from_sharepoint()
-        if staff_df.empty:
+
+        # 👉 Carrega a planilha
+        staff_df_raw, _ = read_excel_sheets_from_sharepoint()
+
+        if staff_df_raw.empty:
             st.info("Planilha vazia.")
             st.stop()
+        
 
-        # int to str
-        staff_df["Quantidade Staff"] = staff_df["Quantidade Staff"].astype(str)
-        staff_df.index = range(1, len(staff_df) + 1)
-        edit_staff = st.data_editor(staff_df, num_rows="dynamic", key="editor_staff")
+        # ---------------------------------------------------------
+        # Mantemos uma versão numérica para comparação/salvamento
+        # ---------------------------------------------------------
+        staff_df_raw.index = range(1, len(staff_df_raw) + 1)
+        staff_df_numeric_base = staff_df_raw.copy()
+        staff_df_numeric_base["Quantidade Staff"] = (
+            pd.to_numeric(staff_df_numeric_base["Quantidade Staff"], errors="coerce")
+            .fillna(0)
+            .astype(int)
+        )
 
+        # ---------------------------------------------------------
+        # Versão apenas para exibição/edição (quantidade como string)
+        # ---------------------------------------------------------
+        staff_df_display = staff_df_numeric_base.copy()
+        staff_df_display["Quantidade Staff"] = staff_df_display["Quantidade Staff"].astype(str)
+
+        edit_staff = st.data_editor(
+            staff_df_display,
+            num_rows="dynamic",
+            key="editor_staff",
+        )
+
+        # ---------------------------------------------------------
+        # Botão de salvamento com verificação de mudanças
+        # ---------------------------------------------------------
         if st.button("Salvar"):
-            # string to int
-            edit_staff["Quantidade Staff"] = pd.to_numeric(edit_staff["Quantidade Staff"], errors="coerce").fillna(0).astype(int)
-            update_staff_sheet(edit_staff)
-            st.cache_data.clear()
-            st.success("Staff atualizado! Tecle F5")
+            # Converte o DF editado para numérico antes de comparar/salvar
+            edit_staff_numeric = edit_staff.copy()
+            edit_staff_numeric["Quantidade Staff"] = (
+                pd.to_numeric(edit_staff_numeric["Quantidade Staff"], errors="coerce")
+                .fillna(0)
+                .astype(int)
+            )
+
+            # Se não houve alteração, apenas informa e sai
+            if edit_staff_numeric.equals(staff_df_numeric_base):
+                st.toast("Nenhuma alteração detectada. Nada foi salvo.")
+            else:
+                update_staff_sheet(edit_staff_numeric)
+                st.cache_data.clear()
+                st.success("Staff atualizado! Tecle F5")
 
 
 if __name__ == "__main__":
