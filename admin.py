@@ -244,7 +244,6 @@ def main():
                     #return
 
                 # Se chegou aqui, todos os checks passaram
-                data_formatada = datetime.today().strftime("%d/%m/%Y")
                 novo_colaborador = {
                     "Nome Completo do Profissional": nome,
                     #"CPF ou CNPJ": cpf,
@@ -260,7 +259,6 @@ def main():
                     "Supervisão Direta": supervisao,
                     "Status do Profissional": status_prof,
                     "Responsável pela Inclusão dos dados": responsavel,
-                    "Criado em": data_formatada,
                     "Ativo": ativo
                 }
                 
