@@ -141,6 +141,78 @@ def update_sharepoint_file(df_editado):
         else:
             st.error(f"Erro ao salvar o arquivo de apontamentos: {e}")
 
+HORARIOS_SIMPLES = {
+    "Simone Cristina de Oliveira Bosco": {
+        "06:00 às 12:00",
+        "05:00 às 17:00",
+        "06:00 às 18:00",
+        "05:30 às 11:30",
+        "07:00 às 13:00",
+    },
+    "Michelle Stefanelli de Castro": {
+        "16:00 às 23:00",
+        "17:00 às 05:00",
+        "18:00 às 06:00",
+        "17:00 às 23:00",
+        "17:30 às 05:30",
+        "16:00 às 22:00",
+    },
+}
+
+def get_supervisor(horario: str, original: str) -> str:
+    """Retorna a supervisora de acordo com o horário."""
+    horario = (horario or "").strip()
+    for sup, lista in HORARIOS_SIMPLES.items():
+        if horario in lista:
+            return sup
+    if horario.lower() in {"não aplicável", "nao aplicavel"}:
+        return "Não Aplicável"
+    if horario.lower() == "horista":
+        return "TODAS"
+    return original
+
+
+# Horários referentes a cada cenário
+DIA_6x1   = {"06:00 às 12:00", "05:30 às 11:30", "07:00 às 13:00"}
+NOITE_6x1 = {"16:00 às 23:00", "17:00 às 23:00", "16:00 às 22:00"}
+
+DIA_12x36   = {"05:00 às 17:00", "06:00 às 18:00"}
+NOITE_12x36 = {"17:00 às 05:00", "18:00 às 06:00", "17:30 às 05:30"}
+
+def get_plantao(escala: str, horario: str, turma: str, original: str = "") -> str:
+    """
+    Devolve o Plantão conforme as regras:
+      • 6x1 Dia / Noite
+      • Plantão A/B Dia / Noite (12x36)
+      • Horista
+    Mantém valor antigo se nada casar.
+    """
+    # Horista sempre vence
+    if escala == "Horista":
+        return "Horista"
+
+    # ---------------- 6x1 ----------------
+    if escala == "6x1":
+        if horario in DIA_6x1:
+            return "6x1 Dia"
+        if horario in NOITE_6x1:
+            return "6x1 Noite"
+
+    # --------------- 12x36 ---------------
+    if escala == "12x36":
+        if horario in DIA_12x36:
+            if turma == "A":
+                return "Plantão A Dia"
+            if turma == "B":
+                return "Plantão B Dia"
+        if horario in NOITE_12x36:
+            if turma == "A":
+                return "Plantão A Noite"
+            if turma == "B":
+                return "Plantão B Noite"
+
+    # Nada combinou? Devolve o que já estava
+    return original
 
 # -------------------------------------------------------------------
 # Formulário de cadastro
@@ -149,12 +221,12 @@ st.set_page_config(layout="wide")
 
 def main():
     st.title("📋 Painel ADM")
-    tabs = st.tabs(["Apontamentos", "Posições", "Edição Colaboradores", "Registrar Colaborador"])
+    tabs = st.tabs(["Apontamentos", "Posições", "Atualizar Colaborador", "Novo Colaborador"])
 
     with tabs[3]:
         spacer_left, main, spacer_right = st.columns([2, 4, 2])
         with main:
-            st.title("Cadastrar ou Atualizar Colaborador")
+            st.title("Cadastrar Colaborador")
             # Lê os dados do Excel com cache
             staff_df, colaboradores_df = read_excel_sheets_from_sharepoint()
             
@@ -179,32 +251,12 @@ def main():
             turmas_unicas = sorted(staff_df["Turma"].unique())
             turma = st.selectbox("Turma", turmas_unicas)
             
-            registro = st.selectbox("Tipo de Registro", ["Entrada", "Saída", "Atualização"])
-            
-            # Configura as datas conforme o tipo de registro
-            if registro == "Entrada":
-                entrada = st.date_input("Data da Entrada", value=datetime.today(), format='DD/MM/YYYY')
-                saida = None
-                att = None
-            elif registro == "Saída":
-                saida = st.date_input("Data da Saída", value=datetime.today(), format='DD/MM/YYYY')
-                entrada = None
-                att = None
-            else:
-                att = st.date_input("Data da Atualização", value=datetime.today(), format='DD/MM/YYYY')
-                entrada = None
-                saida = None
-
-            if registro == "saida":
-                ativo = "Não"
-            else:
-                ativo = "Sim"
+            entrada = st.date_input("Data da Entrada", value=datetime.today(), format='DD/MM/YYYY')
             
             contrato = st.selectbox("Tipo de Contrato", ["CLT", "Autonomo", "Horista"])
             
-            supervisao = st.text_input("Supervisão Direta")
-            status_prof = st.selectbox("Status do Profissional", 
-                                    ["Em Treinamento", "Apto", "Afastado", "Desistiu antes do onboarding", "Desligado"])
+            supervisao = st.selectbox("Supervisão Direta", ["Michelle Stefanelli de Castro", "Simone Cristina de Oliveira Bosco"])
+            
             responsavel = st.text_input("Responsável pela Inclusão dos dados")
             
             if st.button("Enviar"):
@@ -251,46 +303,21 @@ def main():
                     "Escala": escala,
                     "Horário": horario,
                     "Turma": turma,
-                    "Tipo de Registro": registro,
                     "Entrada": entrada,
                     "Saída": saida,
                     "Atualização": att,
                     "Tipo de Contrato": contrato,
                     "Supervisão Direta": supervisao,
-                    "Status do Profissional": status_prof,
+                    "Status do Profissional": "",
                     "Responsável pela Inclusão dos dados": responsavel,
                     "Ativo": ativo
                 }
                 
-                if registro == "Entrada":
-                    # ➕ adiciona
-                    colaboradores_df = pd.concat(
-                        [colaboradores_df, pd.DataFrame([novo_colaborador])],
-                        ignore_index=True
+
+                colaboradores_df = pd.concat(
+                    [colaboradores_df, pd.DataFrame([novo_colaborador])],
+                    ignore_index=True
                     )
-                else:
-                    # 🔄 atualiza / saída
-                    mask = (
-                        colaboradores_df["Nome Completo do Profissional"]
-                        .str.strip().str.casefold()
-                        == nome.strip().casefold()
-                    )
-
-                    if not mask.any():
-                        st.error("Nenhum colaborador encontrado com esse nome para atualizar / registrar saída.")
-                        st.stop()
-
-                    if mask.sum() > 1:
-                        st.error("Há mais de um colaborador com esse nome. Por favor, especifique melhor.")
-                        st.stop()
-
-                    # atualiza apenas colunas cujo valor não é None
-                    for col, val in novo_colaborador.items():
-                        if val is not None:
-                            colaboradores_df.loc[mask, col] = val
-                    
-                    if registro == "Saída":
-                        colaboradores_df.loc[mask, "Ativo"] = "Não"
 
                 # 5️⃣  Salva de volta no SharePoint, limpa cache e avisa
                 update_colaboradores_sheet(colaboradores_df)
@@ -299,131 +326,127 @@ def main():
 # --------------------------------------------------------------------
 # Edição de colaboradores
 # --------------------------------------------------------------------
-        
+    
+        staff_df, colaboradores_df = read_excel_sheets_from_sharepoint()
+
         with tabs[2]:
-            st.title('Base Colaboradores')
-            staff_df, df = read_excel_sheets_from_sharepoint()
+            spacer_left, main, spacer_right = st.columns([2, 4, 2])
+            with main:
 
-            if df.empty:
-                st.info("Não há colaboradores na base")
-            else:
-                # Colunas que devem ser interpretadas como datas
-                date_cols = ["Entrada", "Saída", "Atualização", "Cirado em"]
-                for col in date_cols:
-                    if col in df.columns:
-                        df[col] = (
-                                    pd.to_datetime(
-                                        df[col],
-                                        format="%d/%m/%Y",   # <- formato explícito
-                                        errors="coerce",
-                                    )
-                                    .dt.date
-                        )
-                
-                colunas_selectbox = ["Cargo", "Horário", "Escala", "Turma"] 
+                if colaboradores_df.empty:
+                    st.info("Não há colaboradores na base")
+                    st.stop()
+                    
+                st.title("Atualizar Colaborador")
+                nomes = colaboradores_df["Nome Completo do Profissional"].dropna().sort_values().unique()
+                selec_nome = st.selectbox("Selecione o colaborador", nomes)
 
-                selectbox_columns_opcoes = {
-                    col: sorted(staff_df[col].dropna().astype(str).unique().tolist())
-                    for col in colunas_selectbox if col in staff_df.columns
-                }
-            # Trata colunas com NaN e define tipos apropriados para o editor
-                columns_config = {}
-                for col in df.columns:
-                    if col in selectbox_columns_opcoes:
-                        columns_config[col] = st.column_config.SelectboxColumn(
-                            col,
-                            options=selectbox_columns_opcoes[col],
-                            disabled=False
-                        )
-                    elif col in date_cols:
-                        columns_config[col] = st.column_config.DateColumn(
-                            col,
-                            format="DD/MM/YYYY",
-                            disabled=False
-                        )
-                    else:
-                        df[col] = df[col].astype(str).replace("nan", "")
-                        columns_config[col] = st.column_config.TextColumn(col, disabled=False)
+                linha = colaboradores_df.loc[
+                    colaboradores_df["Nome Completo do Profissional"] == selec_nome
+                ].iloc[0]
 
-                        df.index = range(1, len(df) + 1)
+                with st.form("form_editar_colaborador"):
+                    nome = st.text_input("Nome Completo do Profissional", value=linha["Nome Completo do Profissional"])
 
-                df_editado = st.data_editor(
-                    df,
-                    column_config=columns_config,
-                    num_rows="dynamic",
-                    key="colaboradores"
-                )
+                    # ▸ NOVO: status do profissional
+                    lista_status = ["Em Treinamento", "Apto", "Afastado",
+                                    "Desistiu antes do onboarding", "Desligado"]
+                    idx_status = lista_status.index(linha["Status do Profissional"]) if linha["Status do Profissional"] in lista_status else 0
+                    status_prof = st.selectbox("Status do Profissional", lista_status, index=idx_status)
 
-                if st.button("Salvar "):
-                    erros = []
-                    df_atualizado = df.copy()
-                    hoje_formatado = datetime.today().strftime("%d/%m/%Y")
-                    alguma_linha_modificada = False
+                    def _sel(label, serie, default):
+                        ops = sorted(serie.dropna().unique())
+                        return st.selectbox(label, ops, index=ops.index(default) if default in ops else 0)
 
-                    for idx, row in df_editado.iterrows():
-                        original_row = df.loc[idx]
-                        alterado = False
+                    departamento  = _sel("Departamento",      colaboradores_df["Departamento"],      linha["Departamento"])
+                    cargo         = _sel("Cargo",             colaboradores_df["Cargo"],             linha["Cargo"])
+                    tipo_contrato = _sel("Tipo de Contrato",  colaboradores_df["Tipo de Contrato"],  linha["Tipo de Contrato"])
+                    escala        = _sel("Escala",            colaboradores_df["Escala"],            linha["Escala"])
+                    turma         = _sel("Turma",             colaboradores_df["Turma"],             linha["Turma"])
+                    horario       = _sel("Horário",           colaboradores_df["Horário"],           linha["Horário"])
 
-                        #cpf = str(row.get("CPF ou CNPJ", "")).strip()
-                        cargo = row.get("Cargo", "").strip()
-                        escala = row.get("Escala", "").strip()
-                        horario = row.get("Horário", "").strip()
-                        turma = row.get("Turma", "").strip()
+                    supervisor_calc = get_supervisor(horario, linha["Supervisão Direta"])
+                    st.text_input("Supervisão Direta", value=supervisor_calc, disabled=True)
 
-                        # Verifica se a combinação existe na planilha de staff
-                        filtro_staff = staff_df[
-                            (staff_df["Cargo"] == cargo) &
-                            (staff_df["Escala"] == escala) &
-                            (staff_df["Horário"] == horario) &
-                            (staff_df["Turma"] == turma)
-                        ]
+                    plantao_calc = get_plantao(escala, horario, turma, linha.get("Plantão", ""))
+                    st.text_input("Plantão", value=plantao_calc, disabled=True)
 
-                        if filtro_staff.empty:
-                            erros.append(f"❌ Linha {idx}: combinação inválida de Cargo / Escala / Horário / Turma.")
-                            continue
 
-                        # Verifica se há CPF duplicado (ignorando a própria linha)
-                        #cpfs_sem_atual = df_editado.drop(index=idx)["CPF ou CNPJ"].astype(str).tolist()
-                        #if cpf in cpfs_sem_atual:
-                            #erros.append(f"❌ Linha {idx}: CPF/CNPJ duplicado: {cpf}.")
+                    submitted = st.form_submit_button("Salvar alterações")
 
-                        # Verifica se o limite de colaboradores foi excedido
-                        max_colabs = int(filtro_staff["Quantidade Staff"].iloc[0])
-                        filtro_colab = df_editado[
-                            (df_editado["Escala"] == escala) &
-                            (df_editado["Horário"] == horario) &
-                            (df_editado["Turma"] == turma) &
-                            (df_editado["Cargo"] == cargo)
-                        ]
-                        count_atual = filtro_colab.shape[0]
-                        if count_atual > max_colabs:
-                            erros.append(
-                                f"❌ Linha {idx}: limite de colaboradores excedido para a combinação:<br>"
-                                f"• {cargo} / {escala} / {horario} / {turma} — máximo permitido: {max_colabs}."
-                            )
+                if submitted:
+                    # ─── 1. Verifica se algo mudou ──────────────────────────────────────
+                    sem_mudanca = all([
+                        nome           == linha["Nome Completo do Profissional"],
+                        status_prof    == linha["Status do Profissional"],
+                        departamento   == linha["Departamento"],
+                        cargo          == linha["Cargo"],
+                        tipo_contrato  == linha["Tipo de Contrato"],
+                        escala         == linha["Escala"],
+                        turma          == linha["Turma"],
+                        horario        == linha["Horário"],
+                        supervisor_calc== linha["Supervisão Direta"],
+                        plantao_calc == linha["Plantão"],
+                    ])
+                    if sem_mudanca:
+                        st.toast("Nenhuma alteração detectada — nada para salvar.")
+                        st.stop()
 
-                        # Verifica se a linha foi alterada
-                        for col in df.columns:
-                            val_antigo = str(original_row.get(col, "")).strip()
-                            val_novo = str(row.get(col, "")).strip()
-                            if val_antigo != val_novo:
-                                alterado = True
-                                break
+                    # ─── 2. Confere combinação na aba Staff ────────────────────────────
+                    filtro_staff = staff_df[
+                        (staff_df["Escala"]  == escala) &
+                        (staff_df["Horário"] == horario) &
+                        (staff_df["Turma"]   == turma) &
+                        (staff_df["Cargo"]   == cargo)
+                    ]
+                    if filtro_staff.empty:
+                        st.error("Essa combinação de Escala / Horário / Turma / Cargo não existe na planilha base.")
+                        st.stop()
 
-                        if alterado:
-                            alguma_linha_modificada = True
-                            df_atualizado.loc[idx] = row
-                            df_atualizado.at[idx, "Atualização"] = hoje_formatado
+                    # ─── 3. Checa limite de vagas ──────────────────────────────────────
+                    max_colabs = int(filtro_staff["Quantidade Staff"].iloc[0])
+                    filtro_colab = colaboradores_df[
+                        (colaboradores_df["Escala"]  == escala) &
+                        (colaboradores_df["Horário"] == horario) &
+                        (colaboradores_df["Turma"]   == turma) &
+                        (colaboradores_df["Cargo"]   == cargo)
+                    ]
+                    if filtro_colab.shape[0] >= max_colabs:
+                        st.error(f"Limite de colaboradores atingido para essa combinação: {max_colabs}")
+                        st.stop()
 
-                    if erros:
-                        st.error("⚠️ Não foi possível salvar devido aos seguintes problemas:")
-                        for e in erros:
-                            st.markdown(f"- {e}", unsafe_allow_html=True)
-                    elif not alguma_linha_modificada:
-                        st.toast("Nenhuma modificação foi detectada. Nada foi salvo.")
-                    else:
-                        update_colaboradores_sheet(df_atualizado)
-                        st.cache_data.clear()
+                    # ─── 4. Atualiza linha + carimba data/hora ─────────────────────────
+                    colaboradores_df.loc[
+                        colaboradores_df["Nome Completo do Profissional"] == selec_nome,
+                        [
+                            "Nome Completo do Profissional",
+                            "Status do Profissional",
+                            "Departamento",
+                            "Cargo",
+                            "Tipo de Contrato",
+                            "Escala",
+                            "Turma",
+                            "Horário",
+                            "Supervisão Direta",
+                            "Atualização",
+                            "Plantão"
+                        ],
+                    ] = [
+                        nome,
+                        status_prof,
+                        departamento,
+                        cargo,
+                        tipo_contrato,
+                        escala,
+                        turma,
+                        horario,
+                        supervisor_calc,
+                        datetime.now(),
+                        plantao_calc,     
+                    ]
+
+                    update_colaboradores_sheet(colaboradores_df)
+
 
 # --------------------------------------------------------------------
 # Edição apontamentos        
@@ -577,9 +600,9 @@ def main():
 
                     # 0️⃣: nada mudou → sai cedo
                     if snapshot[cols_cmp].equals(df_editado[cols_cmp]):
-                        st.toast("Nenhuma linha foi editada. Nada foi salvo.")
+                        st.toast("Nenhuma alteração detectada. Nada foi salvo!")
                         st.stop()
-
+ 
                     # 1️⃣: linhas realmente alteradas
                     cmp_orig = snapshot[cols_cmp].fillna(pd.NA)
                     cmp_edit = df_editado[cols_cmp].fillna(pd.NA)
@@ -606,7 +629,7 @@ def main():
                         update_sharepoint_file(df)
                         st.cache_data.clear()
                     else:
-                        st.toast("Os valores editados eram idênticos aos já gravados. Nada foi salvo.")
+                        st.toast("Nenhuma alteração detectada. Nada foi salvo!")
 
 
 #---------------------------------------------------------------------
@@ -661,7 +684,7 @@ def main():
 
             # Se não houve alteração, apenas informa e sai
             if edit_staff_numeric.equals(staff_df_numeric_base):
-                st.toast("Nenhuma alteração detectada. Nada foi salvo.")
+                st.toast("Nenhuma alteração detectada. Nada foi salvo!")
             else:
                 update_staff_sheet(edit_staff_numeric)
                 st.cache_data.clear()
