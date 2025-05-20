@@ -580,29 +580,48 @@ def main():
                 # -------------------------------------------------
                 # 2️⃣  Botão-toggle para PENDENTE × Todos
                 # -------------------------------------------------
-                def toggle_pendentes():
-                    st.session_state.show_pending = not st.session_state.get(
-                        "show_pending", False
-                    )
+                def toggle_pending():
+                    # se clicar, inverte o estado e desliga o outro filtro
+                    st.session_state.show_pending = not st.session_state.get("show_pending", False)
+                    st.session_state.show_verificando = False
 
-                # chave default
+                def toggle_verificando():
+                    st.session_state.show_verificando = not st.session_state.get("show_verificando", False)
+                    st.session_state.show_pending = False
+
+                # chaves default
                 st.session_state.setdefault("show_pending", False)
+                st.session_state.setdefault("show_verificando", False)
 
-                label_btn = (
-                    "🔍  Filtrar Pendentes"
-                    if not st.session_state.show_pending
-                    else "📄  Mostrar todos"
-                )
+                # Elementos null só pra preencher o layout
+                nada = None
+                nada2 = None 
+                nada3 = None 
+                nada4 = None
 
-                st.button(
-                    label_btn,
-                    key="btn_toggle_pendentes",
-                    on_click=toggle_pendentes,
-                )
+                col_btn1, col_btn2, nada3, nada4, nada, nada2 = st.columns(6)
+
+                with col_btn1:
+                    label_pend = (
+                        "🔍  Filtrar Pendentes"
+                        if not st.session_state.show_pending
+                        else "📄  Mostrar todos"
+                    )
+                    st.button(label_pend, key="btn_toggle_pendentes", on_click=toggle_pending)
+
+                with col_btn2:
+                    label_verif = (
+                        "🔎  Filtrar Verificando"
+                        if not st.session_state.show_verificando
+                        else "📄  Mostrar todos"
+                    )
+                    st.button(label_verif, key="btn_toggle_verificando", on_click=toggle_verificando)
 
                 # DataFrame que será mostrado
                 if st.session_state.show_pending:
                     df_view = df[df["Status"] == "PENDENTE"].copy()
+                elif st.session_state.show_verificando:
+                    df_view = df[df["Status"] == "VERIFICANDO"].copy()
                 else:
                     df_view = df.copy()
 
@@ -703,7 +722,7 @@ def main():
                     df_editado = st.data_editor(
                         snapshot,
                         column_config=columns_config,
-                        num_rows="fixed",
+                        num_rows="dynamic",
                         key="apontamentos",
                     )
                     submitted = st.form_submit_button("Submeter Edições")
@@ -794,6 +813,11 @@ def main():
         # Botão de salvamento com verificação de mudanças
         # ---------------------------------------------------------
         if st.button("Salvar"):
+
+            if edit_staff["Quantidade Staff"].isnull().any():
+                st.error("Preencha todos os campos linhas referente a posição sendo criada!")
+                st.stop()
+
             # Converte o DF editado para numérico antes de comparar/salvar
             edit_staff_numeric = edit_staff.copy()
             edit_staff_numeric["Quantidade Staff"] = (
