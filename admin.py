@@ -268,6 +268,10 @@ def calcular_staff_ativos(staff_df: pd.DataFrame, colaboradores_df: pd.DataFrame
 
     merged = staff_df.merge(counts, on=merge_cols, how="outer")
     merged["Quantidade Staff"] = merged["Quantidade Staff"].fillna(0)
+    
+    if "Ativos" not in merged.columns:
+        # Garante a coluna mesmo se o merge resultar em DataFrame sem 'Ativos'
+        merged["Ativos"] = 0
     merged["Ativos"] = merged["Ativos"].fillna(0).astype(int)
 
     return merged[merge_cols + ["Quantidade Staff", "Ativos"]]
