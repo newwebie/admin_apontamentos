@@ -283,19 +283,16 @@ def main():
             responsavel = st.text_input("Responsável pela Inclusão dos dados")
             
             if st.button("Enviar"):
-                # Validação dos campos obrigatórios
+                valido = True
                 if not nome.strip() or not supervisao.strip() or not responsavel.strip() or not cpf.strip():
                     st.error("Preencha os campos obrigatórios: Nome, Supervisão Direta e Responsável.")
-                    return
-
+                    valido = False
 
                 colab_cpfs = colaboradores_df["CPF ou CNPJ"].apply(so_digitos)
-                # Verifica duplicidade de CPF
                 if cpf in colab_cpfs.values:
                     st.error("Já existe um colaborador cadastrado com este CPF/CNPJ.")
-                    return
+                    valido = False
 
-                # Verifica se a combinação (Escala, Horário, Turma, Cargo) existe na aba de Staff
                 filtro_staff = staff_df[
                     (staff_df["Escala"] == escala) &
                     (staff_df["Horário"] == horario) &
@@ -304,51 +301,52 @@ def main():
                 ]
                 if filtro_staff.empty:
                     st.error("Essa combinação de Escala / Horário / Turma / Cargo não existe na planilha base.")
-                    return
+                    valido = False
 
-                # Pega a quantidade máxima permitida para essa combinação
-                max_colabs = int(filtro_staff["Quantidade Staff"].iloc[0])
+                if valido:
+                    max_colabs = int(filtro_staff["Quantidade Staff"].iloc[0])
 
-                # Conta quantos colaboradores já foram cadastrados para essa combinação
-                filtro_colab = colaboradores_df[
-                    (colaboradores_df["Escala"] == escala) &
-                    (colaboradores_df["Horário"] == horario) &
-                    (colaboradores_df["Turma"] == turma) &
-                    (colaboradores_df["Cargo"] == cargo)
-                ]
+                    filtro_colab = colaboradores_df[
+                        (colaboradores_df["Escala"] == escala) &
+                        (colaboradores_df["Horário"] == horario) &
+                        (colaboradores_df["Turma"] == turma) &
+                        (colaboradores_df["Cargo"] == cargo)
+                    ]
 
-                if filtro_colab.shape[0] >= max_colabs:
-                    st.error(f"Limite de colaboradores atingido para essa combinação: {max_colabs}")
-                    return
+                    col_ativo = next((c for c in colaboradores_df.columns if c.strip().lower() == "ativo"), None)
+                    if col_ativo:
+                        filtro_colab = filtro_colab[filtro_colab[col_ativo].astype(str).str.lower() == "sim"]
 
+                    if filtro_colab.shape[0] >= max_colabs:
+                        st.error(f"Limite de colaboradores atingido para essa combinação: {max_colabs}")
+                        valido = False
 
+                if valido:
+                    # Se chegou aqui, todos os checks passaram
+                    novo_colaborador = {
+                        "Nome Completo do Profissional": nome,
+                        "CPF ou CNPJ": cpf,
+                        "Cargo": cargo,
+                        "Escala": escala,
+                        "Horário": horario,
+                        "Turma": turma,
+                        "Entrada": entrada,
+                        "Tipo de Contrato": contrato,
+                        "Supervisão Direta": supervisao,
+                        "Status do Profissional": "",
+                        "Responsável pela Inclusão dos dados": responsavel,
+                        "Ativo": "Sim",
+                        "Status do Profissional": "Em Treinamento",
+                    }
 
-                # Se chegou aqui, todos os checks passaram
-                novo_colaborador = {
-                    "Nome Completo do Profissional": nome,
-                    "CPF ou CNPJ": cpf,
-                    "Cargo": cargo,
-                    "Escala": escala,
-                    "Horário": horario,
-                    "Turma": turma,
-                    "Entrada": entrada,
-                    "Tipo de Contrato": contrato,
-                    "Supervisão Direta": supervisao,
-                    "Status do Profissional": "",
-                    "Responsável pela Inclusão dos dados": responsavel,
-                    "Ativo": "Sim",
-                    "Status do Profissional": "Em Treinamento",
-                }
-                
+                    colaboradores_df = pd.concat(
+                        [colaboradores_df, pd.DataFrame([novo_colaborador])],
+                        ignore_index=True
+                        )
 
-                colaboradores_df = pd.concat(
-                    [colaboradores_df, pd.DataFrame([novo_colaborador])],
-                    ignore_index=True
-                    )
-
-                # 5️⃣  Salva de volta no SharePoint, limpa cache e avisa
-                update_colaboradores_sheet(colaboradores_df)
-                st.cache_data.clear()
+                    # 5️⃣  Salva de volta no SharePoint, limpa cache e avisa
+                    update_colaboradores_sheet(colaboradores_df)
+                    st.cache_data.clear()
 
 # --------------------------------------------------------------------
 # Edição de colaboradores
@@ -503,6 +501,10 @@ def main():
 
                     # exclui o registro que está sendo atualizado  ➜  index != linha.name
                     filtro_colab = colaboradores_df[mask_nova_comb & (colaboradores_df.index != linha.name)]
+
+                    col_ativo = next((c for c in colaboradores_df.columns if c.strip().lower() == "ativo"), None)
+                    if col_ativo:
+                        filtro_colab = filtro_colab[filtro_colab[col_ativo].astype(str).str.lower() == "sim"]
 
                     if filtro_colab.shape[0] >= max_colabs:
                         st.error(f"Limite de colaboradores atingido para essa combinação: {max_colabs}")
