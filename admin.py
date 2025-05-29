@@ -15,6 +15,45 @@ file_name = st.secrets["sharepoint"]["file_name"]
 apontamentos_file = st.secrets["sharepoint"]["apontamentos_file"]
 
 
+def calcular_staff_ativos(staff_df: pd.DataFrame, colaboradores_df: pd.DataFrame) -> pd.DataFrame:
+    """Adiciona a coluna 'Ativos' à planilha de Staff.
+
+    Conta quantos colaboradores ativos existem em cada combinação de
+    ``Escala``, ``Horário``, ``Turma`` e ``Cargo``. Se houver colaboradores
+    ativos em combinações não listadas, essas combinações são inseridas com
+    ``Quantidade Staff`` igual a ``0`` para fins de exibição.
+    """
+
+    merge_cols = ["Escala", "Horário", "Turma", "Cargo"]
+
+    staff_df = staff_df.drop(columns=["Ativos"], errors="ignore").copy()
+
+    col_inativo = next((c for c in colaboradores_df.columns if c.strip().lower() == "inativo"), None)
+    col_ativo = next((c for c in colaboradores_df.columns if c.strip().lower() == "ativo"), None)
+
+    ativos = colaboradores_df
+    if col_inativo:
+        ativos = colaboradores_df[colaboradores_df[col_inativo].astype(str).str.lower() != "sim"]
+    elif col_ativo:
+        ativos = colaboradores_df[colaboradores_df[col_ativo].astype(str).str.lower() == "sim"]
+
+    counts = ativos.groupby(merge_cols).size().reset_index(name="Ativos")
+
+    staff_df = staff_df.merge(counts, on=merge_cols, how="left")
+
+    missing = counts.merge(staff_df[merge_cols], on=merge_cols, how="left", indicator=True)
+    missing = missing[missing["_merge"] == "left_only"][merge_cols + ["Ativos"]]
+    if not missing.empty:
+        missing["Quantidade Staff"] = 0
+        staff_df = pd.concat([
+            staff_df,
+            missing[merge_cols + ["Quantidade Staff", "Ativos"]],
+        ], ignore_index=True)
+
+    staff_df["Ativos"] = staff_df["Ativos"].fillna(0).astype(int)
+    return staff_df
+
+
 
 @st.cache_data
 def read_excel_sheets_from_sharepoint():
@@ -26,6 +65,7 @@ def read_excel_sheets_from_sharepoint():
         staff_df = pd.read_excel(xls, sheet_name="Staff Operações Clínica")
         # Aba com os colaboradores já cadastrados
         colaboradores_df = pd.read_excel(xls, sheet_name="Colaboradores")
+        staff_df = calcular_staff_ativos(staff_df, colaboradores_df)
         return staff_df, colaboradores_df
     except Exception as e:
         st.error(f"Erro ao acessar o arquivo ou ler as planilhas no SharePoint: {e}")
@@ -38,6 +78,8 @@ def update_staff_sheet(staff_df):
         response = File.open_binary(ctx, file_name)
         xls = pd.ExcelFile(io.BytesIO(response.content))
         colaboradores_df = pd.read_excel(xls, sheet_name="Colaboradores")
+
+        staff_df = calcular_staff_ativos(staff_df, colaboradores_df)
 
         out = io.BytesIO()
         with pd.ExcelWriter(out, engine="openpyxl") as w:
@@ -69,7 +111,8 @@ def update_colaboradores_sheet(colaboradores_df):
         response = File.open_binary(ctx, file_name)
         xls = pd.ExcelFile(io.BytesIO(response.content))
         staff_df = pd.read_excel(xls, sheet_name="Staff Operações Clínica")
-        
+        staff_df = calcular_staff_ativos(staff_df, colaboradores_df)
+
         # Cria um novo arquivo Excel em memória com as duas abas
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -309,13 +352,17 @@ def main():
                 # Pega a quantidade máxima permitida para essa combinação
                 max_colabs = int(filtro_staff["Quantidade Staff"].iloc[0])
 
-                # Conta quantos colaboradores já foram cadastrados para essa combinação
+                # Conta quantos colaboradores ativos já foram cadastrados para essa combinação
                 filtro_colab = colaboradores_df[
                     (colaboradores_df["Escala"] == escala) &
                     (colaboradores_df["Horário"] == horario) &
                     (colaboradores_df["Turma"] == turma) &
                     (colaboradores_df["Cargo"] == cargo)
                 ]
+
+                col_ativo = next((c for c in colaboradores_df.columns if c.strip().lower() == "ativo"), None)
+                if col_ativo:
+                    filtro_colab = filtro_colab[filtro_colab[col_ativo].astype(str).str.lower() == "sim"]
 
                 if filtro_colab.shape[0] >= max_colabs:
                     st.error(f"Limite de colaboradores atingido para essa combinação: {max_colabs}")
@@ -503,6 +550,10 @@ def main():
 
                     # exclui o registro que está sendo atualizado  ➜  index != linha.name
                     filtro_colab = colaboradores_df[mask_nova_comb & (colaboradores_df.index != linha.name)]
+
+                    col_ativo = next((c for c in colaboradores_df.columns if c.strip().lower() == "ativo"), None)
+                    if col_ativo:
+                        filtro_colab = filtro_colab[filtro_colab[col_ativo].astype(str).str.lower() == "sim"]
 
                     if filtro_colab.shape[0] >= max_colabs:
                         st.error(f"Limite de colaboradores atingido para essa combinação: {max_colabs}")
@@ -807,6 +858,7 @@ def main():
             staff_df_display,
             num_rows="dynamic",
             key="editor_staff",
+            column_config={"Ativos": st.column_config.NumberColumn(disabled=True)},
         )
 
         # ---------------------------------------------------------
