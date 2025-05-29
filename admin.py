@@ -258,7 +258,7 @@ def calcular_staff_ativos(staff_df: pd.DataFrame, colaboradores_df: pd.DataFrame
     col_ativo = next((c for c in colaboradores_df.columns if c.strip().lower() == "ativo"), None)
     ativos = colaboradores_df
     if col_ativo:
-        ativos = colaboradores_df[colaboradores_df[col_ativo].astype(str).str.lower() == "sim"]
+        ativos = colaboradores_df[colaboradores_df[col_ativo] == "Sim"]
 
     counts = (
         ativos.groupby(merge_cols)
@@ -268,7 +268,7 @@ def calcular_staff_ativos(staff_df: pd.DataFrame, colaboradores_df: pd.DataFrame
 
     merged = staff_df.merge(counts, on=merge_cols, how="outer")
     merged["Quantidade Staff"] = merged["Quantidade Staff"].fillna(0)
-    
+
     if "Ativos" not in merged.columns:
         # Garante a coluna mesmo se o merge resultar em DataFrame sem 'Ativos'
         merged["Ativos"] = 0
@@ -358,7 +358,7 @@ def main():
 
                 col_ativo = next((c for c in colaboradores_df.columns if c.strip().lower() == "ativo"), None)
                 if col_ativo:
-                    filtro_colab = filtro_colab[filtro_colab[col_ativo].astype(str).str.lower() == "sim"]
+                    filtro_colab = filtro_colab[filtro_colab[col_ativo] == "Sim"]
 
                 if filtro_colab.shape[0] >= max_colabs:
                     st.error(f"Limite de colaboradores atingido para essa combinação: {max_colabs}")
@@ -550,7 +550,7 @@ def main():
 
                     col_ativo = next((c for c in colaboradores_df.columns if c.strip().lower() == "ativo"), None)
                     if col_ativo:
-                        filtro_colab = filtro_colab[filtro_colab[col_ativo].astype(str).str.lower() == "sim"]
+                        filtro_colab = filtro_colab[filtro_colab[col_ativo] == "Sim"]
 
                     if filtro_colab.shape[0] >= max_colabs:
                         st.error(f"Limite de colaboradores atingido para essa combinação: {max_colabs}")
