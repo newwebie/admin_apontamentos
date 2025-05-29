@@ -26,7 +26,6 @@ def read_excel_sheets_from_sharepoint():
         staff_df = pd.read_excel(xls, sheet_name="Staff Operações Clínica")
         # Aba com os colaboradores já cadastrados
         colaboradores_df = pd.read_excel(xls, sheet_name="Colaboradores")
-        staff_df = calcular_staff_ativos(staff_df, colaboradores_df)
         return staff_df, colaboradores_df
     except Exception as e:
         st.error(f"Erro ao acessar o arquivo ou ler as planilhas no SharePoint: {e}")
@@ -70,7 +69,6 @@ def update_colaboradores_sheet(colaboradores_df):
         response = File.open_binary(ctx, file_name)
         xls = pd.ExcelFile(io.BytesIO(response.content))
         staff_df = pd.read_excel(xls, sheet_name="Staff Operações Clínica")
-        staff_df = calcular_staff_ativos(staff_df, colaboradores_df)
         
         # Cria um novo arquivo Excel em memória com as duas abas
         output = io.BytesIO()
@@ -145,14 +143,14 @@ def update_sharepoint_file(df_editado):
             st.error(f"Erro ao salvar o arquivo de apontamentos: {e}")
 
 HORARIOS_SIMPLES = {
-    "Michelle Stefanelli de Castro": {
+    "Simone Cristina de Oliveira Bosco": {
         "06:00 às 12:00",
         "05:00 às 17:00",
         "06:00 às 18:00",
         "05:30 às 11:30",
         "07:00 às 13:00",
     },
-    "Simone Cristina de Oliveira Bosco": {
+    "Michelle Stefanelli de Castro": {
         "16:00 às 23:00",
         "17:00 às 05:00",
         "18:00 às 06:00",
@@ -239,39 +237,6 @@ def get_deslig_state(colab_key: str, default_date: date | None, default_reason: 
 def so_digitos(v):
     return re.sub(r"\D", "", str(v))
 
-def calcular_staff_ativos(staff_df: pd.DataFrame, colaboradores_df: pd.DataFrame) -> pd.DataFrame:
-    """Adiciona coluna 'Ativos' com a contagem de colaboradores ativos.
-
-    Se existirem combinações ausentes em ``staff_df`` mas presentes em
-    ``colaboradores_df`` estas serão acrescentadas com ``Quantidade Staff`` igual
-    a zero.
-    """
-
-    staff_df = staff_df.copy()
-
-    merge_cols = ["Escala", "Horário", "Turma", "Cargo"]
-
-    if colaboradores_df.empty:
-        staff_df["Ativos"] = 0
-        return staff_df
-
-    col_ativo = next((c for c in colaboradores_df.columns if c.strip().lower() == "ativo"), None)
-    ativos = colaboradores_df
-    if col_ativo:
-        ativos = colaboradores_df[colaboradores_df[col_ativo].astype(str).str.lower() == "sim"]
-
-    counts = (
-        ativos.groupby(merge_cols)
-        .size()
-        .reset_index(name="Ativos")
-    )
-
-    merged = staff_df.merge(counts, on=merge_cols, how="outer")
-    merged["Quantidade Staff"] = merged["Quantidade Staff"].fillna(0)
-    merged["Ativos"] = merged["Ativos"].fillna(0).astype(int)
-
-    return merged[merge_cols + ["Quantidade Staff", "Ativos"]]
-
 # -------------------------------------------------------------------
 # Formulário de cadastro
 # -------------------------------------------------------------------
@@ -294,7 +259,7 @@ def main():
             
             # Campos do formulário
             nome = st.text_input("Nome Completo do colaborador")
-            cpf = str(st.text_input("CPF ou CNPJ", placeholder="Apenas números"))
+            cpf = st.text_input("CPF ou CNPJ", placeholder="Apenas números")
             
             # Para os selects, usamos os valores únicos da planilha de Staff
             cargos_unicos = sorted(staff_df["Cargo"].unique())
@@ -313,7 +278,7 @@ def main():
             
             contrato = st.selectbox("Tipo de Contrato", ["CLT", "Autonomo", "Horista"])
             
-            supervisao = st.selectbox("Supervisão Direta", ["Michelle Stefanelli de Castro", "Simone Cristina de Oliveira Bosco", "TODAS", "Não Aplicável"])
+            supervisao = st.selectbox("Supervisão Direta", ["Michelle Stefanelli de Castro", "Simone Cristina de Oliveira Bosco", "TODAS"])
             
             responsavel = st.text_input("Responsável pela Inclusão dos dados")
             
@@ -352,10 +317,6 @@ def main():
                     (colaboradores_df["Cargo"] == cargo)
                 ]
 
-                col_ativo = next((c for c in colaboradores_df.columns if c.strip().lower() == "ativo"), None)
-                if col_ativo:
-                    filtro_colab = filtro_colab[filtro_colab[col_ativo].astype(str).str.lower() == "sim"]
-
                 if filtro_colab.shape[0] >= max_colabs:
                     st.error(f"Limite de colaboradores atingido para essa combinação: {max_colabs}")
                     return
@@ -367,7 +328,6 @@ def main():
                     "Nome Completo do Profissional": nome,
                     "CPF ou CNPJ": cpf,
                     "Cargo": cargo,
-                    "Departamento": "Operações Clínicas",
                     "Escala": escala,
                     "Horário": horario,
                     "Turma": turma,
@@ -377,7 +337,7 @@ def main():
                     "Status do Profissional": "",
                     "Responsável pela Inclusão dos dados": responsavel,
                     "Ativo": "Sim",
-                    "Status do Profissional": "Menos de 3 meses",
+                    "Status do Profissional": "Em Treinamento",
                 }
                 
 
@@ -393,6 +353,8 @@ def main():
 # --------------------------------------------------------------------
 # Edição de colaboradores
 # --------------------------------------------------------------------
+    
+        staff_df, colaboradores_df = read_excel_sheets_from_sharepoint()
 
         with tabs[2]:
             spacer_left, main, spacer_right = st.columns([2, 4, 2])
@@ -412,8 +374,6 @@ def main():
                 # 2) Campos sempre visíveis ---------------------------------------------------
                 nome = st.text_input("Nome Completo do Profissional", value=linha["Nome Completo do Profissional"],
                                     key=f"nome_{selec_nome}")
-                
-                cpf = st.text_input("CPF ou CNPJ", value=linha["CPF ou CNPJ"], key=f"cpf_{selec_nome}")
 
                 lista_status = ["Em Treinamento", "Apto", "Afastado",
                                 "Desistiu antes do onboarding", "Desligado"]
@@ -544,10 +504,6 @@ def main():
                     # exclui o registro que está sendo atualizado  ➜  index != linha.name
                     filtro_colab = colaboradores_df[mask_nova_comb & (colaboradores_df.index != linha.name)]
 
-                    col_ativo = next((c for c in colaboradores_df.columns if c.strip().lower() == "ativo"), None)
-                    if col_ativo:
-                        filtro_colab = filtro_colab[filtro_colab[col_ativo].astype(str).str.lower() == "sim"]
-
                     if filtro_colab.shape[0] >= max_colabs:
                         st.error(f"Limite de colaboradores atingido para essa combinação: {max_colabs}")
                         st.stop()
@@ -558,7 +514,6 @@ def main():
                         [
                             "Nome Completo do Profissional",
                             "Status do Profissional",
-                            "CPF ou CNPJ",
                             "Departamento",
                             "Cargo",
                             "Tipo de Contrato",
@@ -576,7 +531,6 @@ def main():
                     ] = [
                         nome,
                         status_prof,
-                        cpf,
                         departamento,
                         cargo,
                         tipo_contrato,
@@ -843,27 +797,16 @@ def main():
             .astype(int)
         )
 
-        if "Ativos" in staff_df_numeric_base.columns:
-            staff_df_numeric_base["Ativos"] = (
-                pd.to_numeric(staff_df_numeric_base["Ativos"], errors="coerce")
-                .fillna(0)
-                .astype(int)
-            )
-
         # ---------------------------------------------------------
         # Versão apenas para exibição/edição (quantidade como string)
         # ---------------------------------------------------------
         staff_df_display = staff_df_numeric_base.copy()
         staff_df_display["Quantidade Staff"] = staff_df_display["Quantidade Staff"].astype(str)
-        staff_df_display["Ativos"] = staff_df_display["Ativos"].astype(int)
 
         edit_staff = st.data_editor(
             staff_df_display,
             num_rows="dynamic",
             key="editor_staff",
-            column_config={
-                "Ativos": st.column_config.NumberColumn("Ativos", disabled=True)
-            },
         )
 
         # ---------------------------------------------------------
@@ -882,13 +825,6 @@ def main():
                 .fillna(0)
                 .astype(int)
             )
-
-            if "Ativos" in edit_staff_numeric.columns:
-                edit_staff_numeric["Ativos"] = (
-                    pd.to_numeric(edit_staff_numeric["Ativos"], errors="coerce")
-                    .fillna(0)
-                    .astype(int)
-                )
 
             # Se não houve alteração, apenas informa e sai
             if edit_staff_numeric.equals(staff_df_numeric_base):
