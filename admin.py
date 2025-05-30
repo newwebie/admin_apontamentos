@@ -258,7 +258,13 @@ def calcular_staff_ativos(staff_df: pd.DataFrame, colaboradores_df: pd.DataFrame
     col_ativo = next((c for c in colaboradores_df.columns if c.strip().lower() == "ativo"), None)
     ativos = colaboradores_df
     if col_ativo:
-        ativos = colaboradores_df[colaboradores_df[col_ativo] == "Sim"]
+         ativos = colaboradores_df[
+            colaboradores_df[col_ativo]
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            == "sim"
+        ]
 
     counts = (
         ativos.groupby(merge_cols)
