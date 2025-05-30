@@ -255,7 +255,7 @@ def calcular_staff_ativos(staff_df: pd.DataFrame, colaboradores_df: pd.DataFrame
         staff_df["Ativos"] = 0
         return staff_df
 
-    col_ativo = next((c for c in colaboradores_df.columns if c.strip().lower() == "ativo"), None)
+    col_ativo = next((c for c in colaboradores_df.columns if c.strip().lower() == "ativos"), None)
     ativos = colaboradores_df
     if col_ativo:
          ativos = colaboradores_df[
@@ -362,7 +362,7 @@ def main():
                     (colaboradores_df["Cargo"] == cargo)
                 ]
 
-                col_ativo = next((c for c in colaboradores_df.columns if c.strip().lower() == "ativo"), None)
+                col_ativo = next((c for c in colaboradores_df.columns if c.strip().lower() == "Ativos"), None)
                 if col_ativo:
                     filtro_colab = filtro_colab[filtro_colab[col_ativo] == "Sim"]
 
@@ -386,7 +386,7 @@ def main():
                     "Supervisão Direta": supervisao,
                     "Status do Profissional": "",
                     "Responsável pela Inclusão dos dados": responsavel,
-                    "Ativo": "Sim",
+                    "Ativos": "Sim",
                     "Status do Profissional": "Menos de 3 meses",
                 }
                 
@@ -494,7 +494,7 @@ def main():
                     motivo_clt = motivo_auto = ""
 
                 # 5) Campo Ativo calculado ----------------------------------------------------
-                ativo_calc = "Não" if status_prof == "Desligado" else linha.get("Ativo", "Sim")
+                ativo_calc = "Não" if status_prof == "Desligado" else linha.get("Ativos", "Sim")
 
                 st.markdown("---")
 
@@ -517,7 +517,7 @@ def main():
                         horario         == linha["Horário"],
                         supervisor_calc == linha["Supervisão Direta"],
                         plantao_calc    == linha["Plantão"],
-                        ativo_calc      == linha.get("Ativo", "Sim"),
+                        ativo_calc      == linha.get("Ativos", "Sim"),
                         motivo_clt      == linha.get("Desligamento CLT", ""),
                         motivo_auto     == linha.get("Saída Autonomo", ""),
                         (
@@ -554,7 +554,7 @@ def main():
                     # exclui o registro que está sendo atualizado  ➜  index != linha.name
                     filtro_colab = colaboradores_df[mask_nova_comb & (colaboradores_df.index != linha.name)]
 
-                    col_ativo = next((c for c in colaboradores_df.columns if c.strip().lower() == "ativo"), None)
+                    col_ativo = next((c for c in colaboradores_df.columns if c.strip().lower() == "ativos"), None)
                     if col_ativo:
                         filtro_colab = filtro_colab[filtro_colab[col_ativo] == "Sim"]
 
@@ -580,7 +580,7 @@ def main():
                             "Plantão",
                             "Desligamento CLT",
                             "Saída Autonomo",
-                            "Ativo",
+                            "Ativos",
                             "Responsável Atualização",
                         ],
                     ] = [
