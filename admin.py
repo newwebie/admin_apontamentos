@@ -13,6 +13,7 @@ password = st.secrets["sharepoint"]["password"]
 site_url = st.secrets["sharepoint"]["site_url"]
 file_name = st.secrets["sharepoint"]["file_name"]
 apontamentos_file = st.secrets["sharepoint"]["apontamentos_file"]
+bio_file = st.secrets["sharepoint"]["bio_file"]
 
 
 
@@ -110,6 +111,19 @@ def get_sharepoint_file():
         return df
     except Exception as e:
         st.error(f"Erro ao ler o arquivo de apontamentos: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data
+def get_bio_file():
+    """Lê o arquivo de estudos para popular o filtro."""
+    try:
+        ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
+        response = File.open_binary(ctx, bio_file)
+        df = pd.read_excel(io.BytesIO(response.content))
+        return df
+    except Exception as e:
+        st.error(f"Erro ao ler o arquivo de estudos: {e}")
         return pd.DataFrame()
 
 
@@ -372,11 +386,17 @@ def main():
                     (colaboradores_df["Cargo"] == cargo)
                 ]
 
+
+                col_ativo = next((c for c in colaboradores_df.columns if c.strip().lower() == "ativos"), None)
+                if col_ativo:
+                    filtro_colab = filtro_colab[filtro_colab[col_ativo] == "Sim"]
+=======
                 col_status = encontrar_coluna_ativo(colaboradores_df)
                 if col_status:
                     filtro_colab = filtro_colab[
                         filtro_colab[col_status].astype(str).str.strip().str.lower() == "sim"
                     ]
+
 
                 if filtro_colab.shape[0] >= max_colabs:
                     st.error(f"Limite de colaboradores atingido para essa combinação: {max_colabs}")
@@ -627,6 +647,7 @@ def main():
         with tabs[0]:
             st.title("Lista de Apontamentos")
             df = get_sharepoint_file()
+            bio_df = get_bio_file()
 
             if df.empty:
                 st.info("Nenhum apontamento encontrado!")
@@ -646,6 +667,24 @@ def main():
                             pd.to_datetime(df[col], format="%d/%m/%Y", errors="coerce")
                             .dt.date
                         )
+
+                # -------------------------------------------------
+                # Filtro por Código do Estudo
+                # -------------------------------------------------
+                df_filtrado = df.copy()
+                if not bio_df.empty and "Código do Estudo" in bio_df.columns:
+                    opcoes_estudos = ["Todos"] + sorted(
+                        bio_df["Código do Estudo"].dropna().unique().tolist()
+                    )
+                    estudo_selecionado = st.selectbox(
+                        "Selecione o Estudo", options=opcoes_estudos
+                    )
+                    if estudo_selecionado != "Todos":
+                        df_filtrado = df_filtrado[
+                            df_filtrado["Código do Estudo"] == estudo_selecionado
+                        ]
+                else:
+                    df_filtrado = df.copy()
 
                 # -------------------------------------------------
                 # 2️⃣  Botão-toggle para PENDENTE × Todos
@@ -689,11 +728,11 @@ def main():
 
                 # DataFrame que será mostrado
                 if st.session_state.show_pending:
-                    df_view = df[df["Status"] == "PENDENTE"].copy()
+                    df_view = df_filtrado[df_filtrado["Status"] == "PENDENTE"].copy()
                 elif st.session_state.show_verificando:
-                    df_view = df[df["Status"] == "VERIFICANDO"].copy()
+                    df_view = df_filtrado[df_filtrado["Status"] == "VERIFICANDO"].copy()
                 else:
-                    df_view = df.copy()
+                    df_view = df_filtrado.copy()
 
                 # -------------------------------------------------
                 # 3️⃣  Configura colunas (idêntico, mas usa df_view)
