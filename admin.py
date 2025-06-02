@@ -253,6 +253,16 @@ def get_deslig_state(colab_key: str, default_date: date | None, default_reason: 
 def so_digitos(v):
     return re.sub(r"\D", "", str(v))
 
+# Localiza a coluna que indica se o colaborador está ativo.
+# Aceita tanto "Ativo" quanto "Ativos", ignorando diferenças de
+# maiúsculas, minúsculas e espaços.
+def encontrar_coluna_ativo(df: pd.DataFrame) -> str | None:
+    for col in df.columns:
+        nome = col.strip().lower()
+        if nome in {"ativo", "ativos"}:
+            return col
+    return None
+
 def calcular_staff_ativos(staff_df: pd.DataFrame, colaboradores_df: pd.DataFrame) -> pd.DataFrame:
     """Adiciona coluna 'Ativos' com a contagem de colaboradores ativos.
 
@@ -269,7 +279,7 @@ def calcular_staff_ativos(staff_df: pd.DataFrame, colaboradores_df: pd.DataFrame
         staff_df["Ativos"] = 0
         return staff_df
 
-    col_ativo = next((c for c in colaboradores_df.columns if c.strip().lower() == "ativos"), None)
+    col_ativo = encontrar_coluna_ativo(colaboradores_df)
     ativos = colaboradores_df
     if col_ativo:
          ativos = colaboradores_df[
@@ -376,9 +386,17 @@ def main():
                     (colaboradores_df["Cargo"] == cargo)
                 ]
 
+
                 col_ativo = next((c for c in colaboradores_df.columns if c.strip().lower() == "ativos"), None)
                 if col_ativo:
                     filtro_colab = filtro_colab[filtro_colab[col_ativo] == "Sim"]
+=======
+                col_status = encontrar_coluna_ativo(colaboradores_df)
+                if col_status:
+                    filtro_colab = filtro_colab[
+                        filtro_colab[col_status].astype(str).str.strip().str.lower() == "sim"
+                    ]
+
 
                 if filtro_colab.shape[0] >= max_colabs:
                     st.error(f"Limite de colaboradores atingido para essa combinação: {max_colabs}")
@@ -400,7 +418,7 @@ def main():
                     "Supervisão Direta": supervisao,
                     "Status do Profissional": "",
                     "Responsável pela Inclusão dos dados": responsavel,
-                    "Ativos": "Sim",
+                    (col_status or "Ativos"): "Sim",
                     "Status do Profissional": "Menos de 3 meses",
                 }
                 
@@ -568,9 +586,11 @@ def main():
                     # exclui o registro que está sendo atualizado  ➜  index != linha.name
                     filtro_colab = colaboradores_df[mask_nova_comb & (colaboradores_df.index != linha.name)]
 
-                    col_ativo = next((c for c in colaboradores_df.columns if c.strip().lower() == "ativos"), None)
-                    if col_ativo:
-                        filtro_colab = filtro_colab[filtro_colab[col_ativo] == "Sim"]
+                    col_status = encontrar_coluna_ativo(colaboradores_df)
+                    if col_status:
+                        filtro_colab = filtro_colab[
+                            filtro_colab[col_status].astype(str).str.strip().str.lower() == "sim"
+                        ]
 
                     if filtro_colab.shape[0] >= max_colabs:
                         st.error(f"Limite de colaboradores atingido para essa combinação: {max_colabs}")
@@ -594,7 +614,7 @@ def main():
                             "Plantão",
                             "Desligamento CLT",
                             "Saída Autonomo",
-                            "Ativos",
+                            col_status or "Ativos",
                             "Responsável Atualização",
                         ],
                     ] = [
