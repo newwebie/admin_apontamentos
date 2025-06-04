@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime, date
 import io
 import re
+import csv
 from office365.sharepoint.client_context import ClientContext
 from office365.sharepoint.files.file import File
 from office365.runtime.auth.user_credential import UserCredential
@@ -113,18 +114,6 @@ def get_sharepoint_file():
         st.error(f"Erro ao ler o arquivo de apontamentos: {e}")
         return pd.DataFrame()
 
-
-@st.cache_data
-def get_bio_file():
-    """Lê o arquivo de estudos para popular o filtro."""
-    try:
-        ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
-        response = File.open_binary(ctx, bio_file)
-        df = pd.read_excel(io.BytesIO(response.content))
-        return df
-    except Exception as e:
-        st.error(f"Erro ao ler o arquivo de estudos: {e}")
-        return pd.DataFrame()
 
 
 def update_sharepoint_file(df_editado):
@@ -387,10 +376,7 @@ def main():
                 ]
 
 
-                col_ativo = next((c for c in colaboradores_df.columns if c.strip().lower() == "ativos"), None)
-                if col_ativo:
-                    filtro_colab = filtro_colab[filtro_colab[col_ativo] == "Sim"]
-=======
+
                 col_status = encontrar_coluna_ativo(colaboradores_df)
                 if col_status:
                     filtro_colab = filtro_colab[
@@ -647,7 +633,6 @@ def main():
         with tabs[0]:
             st.title("Lista de Apontamentos")
             df = get_sharepoint_file()
-            bio_df = get_bio_file()
 
             if df.empty:
                 st.info("Nenhum apontamento encontrado!")
@@ -672,19 +657,9 @@ def main():
                 # Filtro por Código do Estudo
                 # -------------------------------------------------
                 df_filtrado = df.copy()
-                if not bio_df.empty and "Código do Estudo" in bio_df.columns:
-                    opcoes_estudos = ["Todos"] + sorted(
-                        bio_df["Código do Estudo"].dropna().unique().tolist()
-                    )
-                    estudo_selecionado = st.selectbox(
-                        "Selecione o Estudo", options=opcoes_estudos
-                    )
-                    if estudo_selecionado != "Todos":
-                        df_filtrado = df_filtrado[
-                            df_filtrado["Código do Estudo"] == estudo_selecionado
-                        ]
-                else:
-                    df_filtrado = df.copy()
+
+                
+
 
                 # -------------------------------------------------
                 # 2️⃣  Botão-toggle para PENDENTE × Todos
@@ -725,6 +700,22 @@ def main():
                         else "📄  Mostrar todos"
                     )
                     st.button(label_verif, key="btn_toggle_verificando", on_click=toggle_verificando)
+                
+                if "Código do Estudo" in df.columns:
+                    opcoes_estudos = ["Todos"] + sorted(
+                        df["Código do Estudo"].dropna().unique().tolist()
+                    )
+
+                    estudo_selecionado = st.selectbox(
+                        "Selecione o Estudo",
+                        options=opcoes_estudos,
+                        key="estudo_selecionado",
+                    )
+                    
+                    if estudo_selecionado != "Todos":
+                        df_filtrado = df_filtrado[
+                            df_filtrado["Código do Estudo"] == estudo_selecionado
+                        ]
 
                 # DataFrame que será mostrado
                 if st.session_state.show_pending:
