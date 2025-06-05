@@ -716,6 +716,22 @@ def main():
                         df_filtrado = df_filtrado[
                             df_filtrado["Código do Estudo"] == estudo_selecionado
                         ]
+                    
+                    columns_to_display = [
+                        "Status",
+                        "Código do Estudo",
+                        "Responsável Pela Correção",
+                        "Plantão",
+                        "Participante",
+                        "Período",
+                        "Apontamento",
+                        "Prazo Para Resolução",
+                        "Data Resolução",
+                        "Justificativa",
+                        "Responsável Pelo Apontamento",
+                        "Origem Do Apontamento",
+                    ]
+                    df_filtrado = df_filtrado[columns_to_display]
 
                 # DataFrame que será mostrado
                 if st.session_state.show_pending:
