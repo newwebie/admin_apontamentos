@@ -3,7 +3,6 @@ import pandas as pd
 from datetime import datetime, date
 import io
 import re
-import time
 import csv
 from office365.sharepoint.client_context import ClientContext
 from office365.sharepoint.files.file import File
@@ -36,86 +35,72 @@ def read_excel_sheets_from_sharepoint():
         return pd.DataFrame(), pd.DataFrame()
 
 def update_staff_sheet(staff_df):
-    """Atualiza a aba de staff no SharePoint, tentando novamente a cada
-    7 segundos caso o arquivo esteja bloqueado."""
+    try:
+        ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
+        # Lê o workbook para manter Colaboradores intacto
+        response = File.open_binary(ctx, file_name)
+        xls = pd.ExcelFile(io.BytesIO(response.content))
+        colaboradores_df = pd.read_excel(xls, sheet_name="Colaboradores")
 
-    # Lê a planilha atual para manter a aba de colaboradores intacta
-    ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
-    response = File.open_binary(ctx, file_name)
-    xls = pd.ExcelFile(io.BytesIO(response.content))
-    colaboradores_df = pd.read_excel(xls, sheet_name="Colaboradores")
+        out = io.BytesIO()
+        with pd.ExcelWriter(out, engine="openpyxl") as w:
+            staff_df.to_excel(w, sheet_name="Staff Operações Clínica", index=False)
+            colaboradores_df.to_excel(w, sheet_name="Colaboradores", index=False)
+        out.seek(0)
 
-    out = io.BytesIO()
-    with pd.ExcelWriter(out, engine="openpyxl") as w:
-        staff_df.to_excel(w, sheet_name="Staff Operações Clínica", index=False)
-        colaboradores_df.to_excel(w, sheet_name="Colaboradores", index=False)
-
-    file_content = out.getvalue()
-    folder = "/".join(file_name.split("/")[:-1])
-    name = file_name.split("/")[-1]
-
-    while True:
-        try:
-            ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
-            ctx.web.get_folder_by_server_relative_url(folder).upload_file(name, file_content).execute_query()
-            st.success("Alterações submetidas com sucesso!")
-            return True
-        except Exception as e:
-            locked = (
-                getattr(e, "response_status", None) == 423        # HTTP 423 Locked
-                or "-2147018894" in str(e)
-                or "lock" in str(e).lower()
-            )
-            if locked:
-                st.warning(
-                    "Arquivo base em uso. Nova tentativa de salvamento em 7 segundos..."
+        folder = "/".join(file_name.split("/")[:-1])
+        name   = file_name.split("/")[-1]
+        ctx.web.get_folder_by_server_relative_url(folder).upload_file(name, out.read()).execute_query()
+    except Exception as e:
+        locked = (
+            getattr(e, "response_status", None) == 423        # HTTP 423 Locked
+            or "-2147018894" in str(e)                       # SPFileLockException
+            or "lock" in str(e).lower()                      # texto contém “lock”
+        )
+        if locked:
+            st.warning(
+                "Não foi possível salvar: o arquivo base está aberto em uma máquina."
+                "Feche-o no Excel/SharePoint ou tente novamente mais tarde."
                 )
-                time.sleep(7)
-            else:
-                st.error(f"Erro ao atualizar a planilha de colaboradores no SharePoint: {e}")
-                return False
+        else:
+            st.error(f"Erro ao atualizar a planilha de colaboradores no SharePoint: {e}")
 
 def update_colaboradores_sheet(colaboradores_df):
-    """Atualiza a aba de colaboradores no SharePoint com tentativas
-    automáticas caso o arquivo esteja bloqueado."""
-
-    ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
-    response = File.open_binary(ctx, file_name)
-    xls = pd.ExcelFile(io.BytesIO(response.content))
-    staff_df = pd.read_excel(xls, sheet_name="Staff Operações Clínica")
-    staff_df = calcular_staff_ativos(staff_df, colaboradores_df)
-
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        staff_df.to_excel(writer, sheet_name="Staff Operações Clínica", index=False)
-        colaboradores_df.to_excel(writer, sheet_name="Colaboradores", index=False)
-
-    file_content = output.getvalue()
-    folder_path = "/".join(file_name.split("/")[:-1])
-    file_name_only = file_name.split("/")[-1]
-
-    while True:
-        try:
-            ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
-            target_folder = ctx.web.get_folder_by_server_relative_url(folder_path)
-            target_folder.upload_file(file_name_only, file_content).execute_query()
-            st.cache_data.clear()
-            st.success("Alterações submetidas com sucesso!")
-            return True
-        except Exception as e:
-            locked = (
-                getattr(e, "response_status", None) == 423
-                or "-2147018894" in str(e)
-                or "lock" in str(e).lower()
-            )
-            if locked:
-                st.warning(
-                    "Arquivo base em uso. Nova tentativa de salvamento em 7 segundos..."
+    try:
+        ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
+        # Recarrega o arquivo para preservar a aba de Staff
+        response = File.open_binary(ctx, file_name)
+        xls = pd.ExcelFile(io.BytesIO(response.content))
+        staff_df = pd.read_excel(xls, sheet_name="Staff Operações Clínica")
+        staff_df = calcular_staff_ativos(staff_df, colaboradores_df)
+        
+        # Cria um novo arquivo Excel em memória com as duas abas
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            staff_df.to_excel(writer, sheet_name="Staff Operações Clínica", index=False)
+            colaboradores_df.to_excel(writer, sheet_name="Colaboradores", index=False)
+        output.seek(0)
+        file_content = output.read()
+        
+        folder_path = "/".join(file_name.split("/")[:-1])
+        file_name_only = file_name.split("/")[-1]
+        target_folder = ctx.web.get_folder_by_server_relative_url(folder_path)
+        target_folder.upload_file(file_name_only, file_content).execute_query()
+        st.cache_data.clear()
+        st.success("Alterações submetidas com sucesso!")
+    except Exception as e:
+        locked = (
+            getattr(e, "response_status", None) == 423        # HTTP 423 Locked
+            or "-2147018894" in str(e)                       # SPFileLockException
+            or "lock" in str(e).lower()                      # texto contém “lock”
+        )
+        if locked:
+            st.warning(
+                "Não foi possível salvar: o arquivo base está aberto em uma máquina."
+                "Feche-o no Excel/SharePoint ou tente novamente mais tarde."
                 )
-                time.sleep(7)
-            else:
-                st.error(f"Erro ao atualizar a planilha de colaboradores no SharePoint: {e}")
-                return False
+        else:
+            st.error(f"Erro ao atualizar a planilha de colaboradores no SharePoint: {e}")
 
 
 @st.cache_data
@@ -132,38 +117,35 @@ def get_sharepoint_file():
 
 
 def update_sharepoint_file(df_editado):
-    """Salva o DataFrame de apontamentos tentando novamente a cada 7 segundos
-    caso o arquivo esteja bloqueado."""
+    try:
+        ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
 
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df_editado.to_excel(writer, index=False)
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            df_editado.to_excel(writer, index=False)
+        output.seek(0)
+        file_content = output.read()
 
-    file_content = output.getvalue()
-    folder_path = "/".join(apontamentos_file.split("/")[:-1])
-    file_name_only = apontamentos_file.split("/")[-1]
+        folder_path = "/".join(apontamentos_file.split("/")[:-1])
+        file_name_only = apontamentos_file.split("/")[-1]
+        target_folder = ctx.web.get_folder_by_server_relative_url(folder_path)
+        target_folder.upload_file(file_name_only, file_content).execute_query()
+        st.success("Apontamentos atualizados com sucesso!")
 
-    while True:
-        try:
-            ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
-            target_folder = ctx.web.get_folder_by_server_relative_url(folder_path)
-            target_folder.upload_file(file_name_only, file_content).execute_query()
-            st.success("Apontamentos atualizados com sucesso!")
-            return True
-        except Exception as e:
-            locked = (
-                getattr(e, "response_status", None) == 423
-                or "-2147018894" in str(e)
-                or "lock" in str(e).lower()
+    # 👇 só trata o caso “arquivo bloqueado/aberto”; deixa o resto como está
+    except Exception as e:
+        locked = (
+            getattr(e, "response_status", None) == 423       # HTTP 423 Locked
+            or "-2147018894" in str(e)                      # SPFileLockException
+            or "lock" in str(e).lower()                     # texto contém “lock”
+        )
+        if locked:
+            st.warning(
+                "Não foi possível salvar: o arquivo está aberto ou bloqueado.\n"
+                "Feche-o no Excel/SharePoint e tente novamente mais tarde."
             )
-            if locked:
-                st.warning(
-                    "Arquivo em uso. Nova tentativa de salvamento em 7 segundos..."
-                )
-                time.sleep(7)
-            else:
-                st.error(f"Erro ao salvar o arquivo de apontamentos: {e}")
-                return False
+        else:
+            st.error(f"Erro ao salvar o arquivo de apontamentos: {e}")
 
 HORARIOS_SIMPLES = {
     "Michelle Stefanelli de Castro": {
@@ -393,11 +375,6 @@ def main():
                     (colaboradores_df["Cargo"] == cargo)
                 ]
 
-
-
-                col_ativo = next((c for c in colaboradores_df.columns if c.strip().lower() == "ativos"), None)
-                if col_ativo:
-                    filtro_colab = filtro_colab[filtro_colab[col_ativo] == "Sim"]
 
 
                 col_status = encontrar_coluna_ativo(colaboradores_df)
@@ -681,19 +658,7 @@ def main():
                 # -------------------------------------------------
                 df_filtrado = df.copy()
 
-                if "Código do Estudo" in df.columns:
-                    opcoes_estudos = ["Todos"] + sorted(
-                        df["Código do Estudo"].dropna().unique().tolist()
-                    )
-                    estudo_selecionado = st.selectbox(
-                        "Selecione o Estudo", options=opcoes_estudos
-                    )
-                    if estudo_selecionado != "Todos":
-                        df_filtrado = df_filtrado[
-                            df_filtrado["Código do Estudo"] == estudo_selecionado
-                        ]
-                else:
-                    df_filtrado = df.copy()
+                
 
 
                 # -------------------------------------------------
@@ -735,6 +700,32 @@ def main():
                         else "📄  Mostrar todos"
                     )
                     st.button(label_verif, key="btn_toggle_verificando", on_click=toggle_verificando)
+
+                    columns_to_display = [
+                            "Status",
+                            "Código do Estudo",
+                            "Responsável Pela Correção",
+                            "Plantão",
+                            "Participante",
+                            "Período",
+                            "Documentos",
+                            "Apontamento",
+                            "Prazo Para Resolução",
+                            "Data Resolução",
+                            "Justificativa",
+                            "Responsável Pelo Apontamento",
+                            "Origem Do Apontamento",
+                        ]
+                    
+                    df_filtrado = df_filtrado[columns_to_display]
+
+                # DataFrame que será mostrado
+                if st.session_state.show_pending:
+                    df_view = df_filtrado[df_filtrado["Status"] == "PENDENTE"].copy()
+                elif st.session_state.show_verificando:
+                    df_view = df_filtrado[df_filtrado["Status"] == "VERIFICANDO"].copy()
+                else:
+                    df_view = df_filtrado.copy()
                 
                 if "Código do Estudo" in df.columns:
                     opcoes_estudos = ["Todos"] + sorted(
@@ -751,23 +742,6 @@ def main():
                         df_filtrado = df_filtrado[
                             df_filtrado["Código do Estudo"] == estudo_selecionado
                         ]
-                    
-                    columns_to_display = [
-                        "Status",
-                        "Código do Estudo",
-                        "Responsável Pela Correção",
-                        "Plantão",
-                        "Participante",
-                        "Período",
-                        "Documentos",
-                        "Apontamento",
-                        "Prazo Para Resolução",
-                        "Data Resolução",
-                        "Justificativa",
-                        "Responsável Pelo Apontamento",
-                        "Origem Do Apontamento",
-                    ]
-                    df_filtrado = df_filtrado[columns_to_display]
 
                 # DataFrame que será mostrado
                 if st.session_state.show_pending:
@@ -1000,9 +974,9 @@ def main():
             if edit_staff_numeric.equals(staff_df_numeric_base):
                 st.toast("Nenhuma alteração detectada. Nada foi salvo!")
             else:
-                if update_staff_sheet(edit_staff_numeric):
-                    st.cache_data.clear()
-                    st.success("Staff atualizado! Tecle F5")
+                update_staff_sheet(edit_staff_numeric)
+                st.cache_data.clear()
+                st.success("Staff atualizado! Tecle F5")
 
 
 if __name__ == "__main__":
