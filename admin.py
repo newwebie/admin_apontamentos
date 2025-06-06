@@ -724,6 +724,7 @@ def main():
                         "Plantão",
                         "Participante",
                         "Período",
+                        "Documento",
                         "Apontamento",
                         "Prazo Para Resolução",
                         "Data Resolução",
