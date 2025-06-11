@@ -644,8 +644,12 @@ def main():
                     "Data do Apontamento",
                     "Prazo Para Resolução",
                     "Data de Verificação",
+                    "Data Resolução",
                     "Data Atualização",
+                    "Disponibilizado para Verificação"
                 ]
+
+                
                 for col in colunas_data:
                     if col in df.columns:
                         df[col] = (
@@ -680,10 +684,10 @@ def main():
                 # Elementos null só pra preencher o layout
                 nada = None
                 nada2 = None 
-                nada3 = None 
                 nada4 = None
+                nada = None
 
-                col_btn1, col_btn2, nada3, nada4, nada, nada2 = st.columns(6)
+                col_btn1, col_btn2, nada, nada3, nada4, nada2 = st.columns(6)
 
                 with col_btn1:
                     label_pend = (
@@ -701,6 +705,8 @@ def main():
                     )
                     st.button(label_verif, key="btn_toggle_verificando", on_click=toggle_verificando)
 
+
+
                     columns_to_display = [
                             "Status",
                             "Código do Estudo",
@@ -708,13 +714,18 @@ def main():
                             "Plantão",
                             "Participante",
                             "Período",
+                            "Grau De Criticidade Do Apontamento",
                             "Documentos",
                             "Apontamento",
+                            "Data do Apontamento",
+                            "Disponibilizado para Verificação",
                             "Prazo Para Resolução",
                             "Data Resolução",
                             "Justificativa",
                             "Responsável Pelo Apontamento",
                             "Origem Do Apontamento",
+                            "Data Atualização", 
+                            "Responsável Atualização"
                         ]
                     
                     df_filtrado = df_filtrado[columns_to_display]
@@ -816,10 +827,6 @@ def main():
                         df_view[col] = df_view[col].astype(str).replace("nan", "")
                         columns_config[col] = st.column_config.TextColumn(col, disabled=False)
 
-                # colunas de auditoria (só-leitura) -----------------------------------------
-                for audit_col in ["Data Atualização", "Responsável Atualização"]:
-                    if audit_col not in df_view.columns:
-                        df_view[audit_col] = ""
 
                 columns_config["Data Atualização"] = st.column_config.DateColumn(
                     "Data Atualização", format="DD/MM/YYYY", disabled=True
@@ -841,7 +848,7 @@ def main():
                 # 4️⃣  RESPONSÁVEL ------------------------------------------------------------
                     responsavel_att = st.selectbox(
                         "Responsável pela Atualização dos dados",
-                        options=["", "Guilherme Silva", "Sandra de Souza"],
+                        options=["", "Guilherme Gonçalves", "Sandra de Souza"],
                         key="resp_att"
                     )
 
@@ -875,18 +882,27 @@ def main():
                         st.stop()
 
                     data_atual = datetime.now()
+
                     diff_mask = _norm(snapshot).ne(_norm(df_editado)).any(axis=1)
                     linhas_alteradas = df_editado.loc[diff_mask]
-                    
-                    
 
                     idx_modificados = []
                     df[cols_cmp] = df[cols_cmp].astype(object)
+
                     for _, row in linhas_alteradas.iterrows():
                         orig_idx = int(row["orig_idx"])
+
                         if not _norm(df.loc[[orig_idx]]).equals(_norm(row.to_frame().T)):
-                            # aplica mudanças
+                            # 1️⃣ pega o status antigo ANTES de sobrescrever
+                            status_antigo = str(df.loc[orig_idx, "Status"]).strip().upper()
+
+                            # 2️⃣ aplica as mudanças
                             df.loc[orig_idx, cols_cmp] = row[cols_cmp].values
+
+                            novo_status = str(row.get("Status", "")).strip().upper()
+                            if novo_status == "VERIFICANDO" and status_antigo != "VERIFICANDO":
+                                df.loc[orig_idx, "Disponibilizado para Verificação"] = data_atual
+
                             idx_modificados.append(orig_idx)
 
                     if idx_modificados:
@@ -897,6 +913,7 @@ def main():
                     else:
                         st.toast("Nenhuma alteração detectada. Nada foi salvo!")
 
+                    
 #---------------------------------------------------------------------
 # Edição de Staff
 #---------------------------------------------------------------------
