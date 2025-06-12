@@ -7,6 +7,10 @@ import csv
 from office365.sharepoint.client_context import ClientContext
 from office365.sharepoint.files.file import File
 from office365.runtime.auth.user_credential import UserCredential
+import logging
+
+logger = logging.getLogger("streamlit.runtime.scriptrunner.script_runner")
+logger.setLevel(logging.WARN)
 
 # === Configurações do SharePoint ===
 username = st.secrets["sharepoint"]["username"]
@@ -252,6 +256,9 @@ def encontrar_coluna_ativo(df: pd.DataFrame) -> str | None:
             return col
     return None
 
+def clear_cache_and_reload():
+    st.cache_data.clear()       # limpa st.cache_data
+    
 def calcular_staff_ativos(staff_df: pd.DataFrame, colaboradores_df: pd.DataFrame) -> pd.DataFrame:
     """Adiciona coluna 'Ativos' com a contagem de colaboradores ativos.
 
@@ -630,26 +637,27 @@ def main():
 # --------------------------------------------------------------------
 
     
+
         with tabs[0]:
             st.title("Lista de Apontamentos")
-            df = get_sharepoint_file()
+
+            # 1️⃣  Carrega arquivo e garante 'orig_idx' --------------------------------
+            df = get_sharepoint_file()                # <- sua função de leitura
+
+            if "orig_idx" not in df.columns:          # primeira execução
+                df["orig_idx"] = range(len(df))       # cria IDs
+
+            df.set_index("orig_idx", inplace=True)    # índice permanente = ID
 
             if df.empty:
                 st.info("Nenhum apontamento encontrado!")
             else:
-                # -------------------------------------------------
-                # 1️⃣  Conversão das colunas de data
-                # -------------------------------------------------
+                # 2️⃣  Conversão de colunas de data -----------------------------------
                 colunas_data = [
-                    "Data do Apontamento",
-                    "Prazo Para Resolução",
-                    "Data de Verificação",
-                    "Data Resolução",
-                    "Data Atualização",
-                    "Disponibilizado para Verificação"
+                    "Data do Apontamento", "Prazo Para Resolução", "Data de Verificação",
+                    "Data Resolução", "Data Atualização", "Disponibilizado para Verificação"
                 ]
 
-                
                 for col in colunas_data:
                     if col in df.columns:
                         df[col] = (
@@ -657,19 +665,12 @@ def main():
                             .dt.date
                         )
 
-                # -------------------------------------------------
-                # Filtro por Código do Estudo
-                # -------------------------------------------------
+                # 3️⃣  Cópia para filtros --------------------------------------------
                 df_filtrado = df.copy()
 
-                
-
-
-                # -------------------------------------------------
-                # 2️⃣  Botão-toggle para PENDENTE × Todos
-                # -------------------------------------------------
+                # (demais filtros / botões PENDENTE & VERIFICANDO — **inalterados**)
+                # ---------------------------------------------------------------------
                 def toggle_pending():
-                    # se clicar, inverte o estado e desliga o outro filtro
                     st.session_state.show_pending = not st.session_state.get("show_pending", False)
                     st.session_state.show_verificando = False
 
@@ -677,17 +678,10 @@ def main():
                     st.session_state.show_verificando = not st.session_state.get("show_verificando", False)
                     st.session_state.show_pending = False
 
-                # chaves default
                 st.session_state.setdefault("show_pending", False)
                 st.session_state.setdefault("show_verificando", False)
 
-                # Elementos null só pra preencher o layout
-                nada = None
-                nada2 = None 
-                nada4 = None
-                nada = None
-
-                col_btn1, col_btn2, nada, nada3, nada4, nada2 = st.columns(6)
+                col_btn1, col_btn2, col_btn3,*_ = st.columns(6)
 
                 with col_btn1:
                     label_pend = (
@@ -704,63 +698,46 @@ def main():
                         else "📄  Mostrar todos"
                     )
                     st.button(label_verif, key="btn_toggle_verificando", on_click=toggle_verificando)
-
-
-
-                    columns_to_display = [
-                            "Status",
-                            "Código do Estudo",
-                            "Responsável Pela Correção",
-                            "Plantão",
-                            "Participante",
-                            "Período",
-                            "Grau De Criticidade Do Apontamento",
-                            "Documentos",
-                            "Apontamento",
-                            "Data do Apontamento",
-                            "Disponibilizado para Verificação",
-                            "Prazo Para Resolução",
-                            "Data Resolução",
-                            "Justificativa",
-                            "Responsável Pelo Apontamento",
-                            "Origem Do Apontamento",
-                            "Data Atualização", 
-                            "Responsável Atualização"
-                        ]
-                    
-                    df_filtrado = df_filtrado[columns_to_display]
-
-                # DataFrame que será mostrado
-                if st.session_state.show_pending:
-                    df_view = df_filtrado[df_filtrado["Status"] == "PENDENTE"].copy()
-                elif st.session_state.show_verificando:
-                    df_view = df_filtrado[df_filtrado["Status"] == "VERIFICANDO"].copy()
-                else:
-                    df_view = df_filtrado.copy()
                 
-                if "Código do Estudo" in df.columns:
-                    opcoes_estudos = ["Todos"] + sorted(
-                        df["Código do Estudo"].dropna().unique().tolist()
+                with col_btn3:
+                    st.button(
+                        "🔄  Atualizar",
+                        key="btn_clear_cache",
+                        on_click=clear_cache_and_reload
                     )
 
-                    estudo_selecionado = st.selectbox(
-                        "Selecione o Estudo",
-                        options=opcoes_estudos,
-                        key="estudo_selecionado",
-                    )
-                    
-                    if estudo_selecionado != "Todos":
-                        df_filtrado = df_filtrado[
-                            df_filtrado["Código do Estudo"] == estudo_selecionado
-                        ]
+                # 4️⃣  Colunas a exibir ------------------------------------------------
+                columns_to_display = [
+                    "Status", "Código do Estudo", "Responsável Pela Correção", "Plantão",
+                    "Participante", "Período", "Grau De Criticidade Do Apontamento",
+                    "Documentos", "Apontamento", "Data do Apontamento",
+                    "Disponibilizado para Verificação", "Prazo Para Resolução",
+                    "Data Resolução", "Justificativa", "Responsável Pelo Apontamento",
+                    "Origem Do Apontamento", "Data Atualização", "Responsável Atualização"
+                ]
+                df_filtrado = df_filtrado[columns_to_display]
 
-                # DataFrame que será mostrado
+                # 5️⃣  Aplica filtros (pendente / verificando) -------------------------
                 if st.session_state.show_pending:
                     df_view = df_filtrado[df_filtrado["Status"] == "PENDENTE"].copy()
                 elif st.session_state.show_verificando:
                     df_view = df_filtrado[df_filtrado["Status"] == "VERIFICANDO"].copy()
                 else:
                     df_view = df_filtrado.copy()
+
+                # 6️⃣  Filtro por Código do Estudo ------------------------------------
+                if "Código do Estudo" in df.columns:
+                    opcoes_estudos = ["Todos"] + sorted(df["Código do Estudo"].dropna().unique())
+                    estudo_sel = st.selectbox("Selecione o Estudo", opcoes_estudos, key="estudo_selecionado")
+
+                    if estudo_sel != "Todos":
+                        df_view = df_view[df_view["Código do Estudo"] == estudo_sel]
+
+                # 7️⃣  Garante coluna 'orig_idx' VISÍVEL -------------------------------
+                #    (reset_index move o índice → coluna; índice ficará oculto)
+                df_view = df_view.reset_index()               # cria coluna orig_idx
+                first = df_view.pop("orig_idx")               # move p/ primeira posição
+                df_view.insert(0, "orig_idx", first)
 
                 # -------------------------------------------------
                 # 3️⃣  Configura colunas (idêntico, mas usa df_view)
@@ -803,13 +780,6 @@ def main():
                 }
 
 
-                if "orig_idx" not in df_view.columns:
-                    df_view = df_view.reset_index().rename(columns={"index": "orig_idx"})
-                    # se preferir manter a ordem original das colunas:
-                    first = df_view.pop("orig_idx")
-                    df_view.insert(0, "orig_idx", first)
-
-                # 1️⃣  CONFIGURAÇÃO DE COLUNAS ------------------------------------------------
                 columns_config = {}
                 for col in df_view.columns:
                     if col in selectbox_columns_opcoes:
@@ -817,16 +787,14 @@ def main():
                             col, options=selectbox_columns_opcoes[col], disabled=False
                         )
                     elif col in colunas_data:
-                        columns_config[col] = st.column_config.DateColumn(col, format="DD/MM/YYYY", disabled=False)
+                        columns_config[col] = st.column_config.DateColumn(col, format="DD/MM/YYYY")
                     elif col == "orig_idx":
                         columns_config[col] = st.column_config.NumberColumn(
-                            "ID",          # rótulo que aparece no cabeçalho
-                            disabled=True, # usuário não edita
+                            "ID", disabled=True           # coluna ID fixo, não editável
                         )
                     else:
                         df_view[col] = df_view[col].astype(str).replace("nan", "")
-                        columns_config[col] = st.column_config.TextColumn(col, disabled=False)
-
+                        columns_config[col] = st.column_config.TextColumn(col)
 
                 columns_config["Data Atualização"] = st.column_config.DateColumn(
                     "Data Atualização", format="DD/MM/YYYY", disabled=True
@@ -835,20 +803,15 @@ def main():
                     "Responsável Atualização", disabled=True
                 )
 
-                # 2️⃣  FOTO IMUTÁVEL p/ comparação -------------------------------------------
+                # 9️⃣  FOTO IMUTÁVEL p/ comparação ------------------------------------
                 snapshot = df_view.copy(deep=True)
-
-                # 3️⃣  COLUNAS QUE DEVEM SER COMPARADAS (exclui orig_idx e auditoria) --------
                 cols_cmp = [c for c in snapshot.columns if c not in ("orig_idx", "Data Atualização", "Responsável Atualização")]
 
-
-
-                # 5️⃣  EDITOR ----------------------------------------------------------------
+                # 🔟  Formulário e Editor ---------------------------------------------
                 with st.form("grade"):
-                # 4️⃣  RESPONSÁVEL ------------------------------------------------------------
                     responsavel_att = st.selectbox(
                         "Responsável pela Atualização dos dados",
-                        options=["", "Guilherme Gonçalves", "Sandra de Souza"],
+                        ["", "Guilherme Gonçalves", "Sandra de Souza"],
                         key="resp_att"
                     )
 
@@ -857,46 +820,58 @@ def main():
                         column_config=columns_config,
                         num_rows="dynamic",
                         key="apontamentos",
+                        hide_index=True       # <- oculta índice → só 1 coluna de ID
                     )
                     submitted = st.form_submit_button("Submeter Edições")
 
-                # -------------------------------------------------
-                # 5️⃣ Grava só se algo mudou
-                # -------------------------------------------------
+                # 11️⃣  Salva apenas se algo mudou ------------------------------------
                 if submitted:
                     if responsavel_att.strip() == "":
                         st.warning("Escolha quem é o responsável antes de submeter.")
                         st.stop()
 
-                    # -------- helper para normalizar ---------
+                    # helper normalização
                     def _norm(df_like: pd.DataFrame) -> pd.DataFrame:
                         return (
-                            df_like[cols_cmp]          # só colunas comparáveis
-                            .astype(str)               # força string
-                            .apply(lambda s: s.str.strip().replace("nan", ""))  # remove espaços e "nan"
+                            df_like[cols_cmp]
+                            .astype(str)
+                            .apply(lambda s: s.str.strip().replace("nan", ""))
                         )
 
-                    # nada mudou?
                     if _norm(snapshot).equals(_norm(df_editado)):
                         st.toast("Nenhuma alteração detectada. Nada foi salvo!")
                         st.stop()
 
                     data_atual = datetime.now()
 
-                    diff_mask = _norm(snapshot).ne(_norm(df_editado)).any(axis=1)
-                    linhas_alteradas = df_editado.loc[diff_mask]
+                    snap_idx = snapshot.set_index("orig_idx")
+                    edit_idx = df_editado.set_index("orig_idx")
+
+                    # linha vazia → exclusão
+                    linhas_para_excluir = edit_idx.index[
+                        _norm(edit_idx)[cols_cmp]
+                        .replace("", pd.NA)
+                        .isna()
+                        .all(axis=1)
+                    ]
+                    if len(linhas_para_excluir) > 0:
+                        edit_idx = edit_idx.drop(linhas_para_excluir)
+
+                    removidos = snap_idx.index.difference(edit_idx.index).union(linhas_para_excluir)
+
+                    comuns = snap_idx.index.intersection(edit_idx.index)
+                    snap_cmp = _norm(snap_idx.loc[comuns].reset_index())
+                    edit_cmp = _norm(edit_idx.loc[comuns].reset_index())
+                    diff_mask = snap_cmp.ne(edit_cmp).any(axis=1)
+                    linhas_alteradas = edit_idx.loc[comuns].reset_index().loc[diff_mask]
 
                     idx_modificados = []
                     df[cols_cmp] = df[cols_cmp].astype(object)
 
                     for _, row in linhas_alteradas.iterrows():
                         orig_idx = int(row["orig_idx"])
-
                         if not _norm(df.loc[[orig_idx]]).equals(_norm(row.to_frame().T)):
-                            # 1️⃣ pega o status antigo ANTES de sobrescrever
                             status_antigo = str(df.loc[orig_idx, "Status"]).strip().upper()
-
-                            # 2️⃣ aplica as mudanças
                             df.loc[orig_idx, cols_cmp] = row[cols_cmp].values
 
                             novo_status = str(row.get("Status", "")).strip().upper()
@@ -905,15 +880,22 @@ def main():
 
                             idx_modificados.append(orig_idx)
 
+                    mudou = False
                     if idx_modificados:
-                        df.loc[idx_modificados, "Data Atualização"]        = data_atual
+                        df.loc[idx_modificados, "Data Atualização"] = data_atual
                         df.loc[idx_modificados, "Responsável Atualização"] = responsavel_att.strip()
-                        update_sharepoint_file(df)
+                        mudou = True
+
+                    if len(removidos) > 0:
+                        df.drop(index=list(removidos), inplace=True)
+                        mudou = True
+
+                    if mudou:
+                        update_sharepoint_file(df.reset_index())  # salva com coluna 'orig_idx'
                         st.cache_data.clear()
                     else:
                         st.toast("Nenhuma alteração detectada. Nada foi salvo!")
 
-                    
 #---------------------------------------------------------------------
 # Edição de Staff
 #---------------------------------------------------------------------
