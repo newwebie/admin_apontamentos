@@ -30,7 +30,6 @@ def read_excel_sheets_from_sharepoint():
         staff_df = pd.read_excel(xls, sheet_name="Staff Operações Clínica")
         # Aba com os colaboradores já cadastrados
         colaboradores_df = pd.read_excel(xls, sheet_name="Colaboradores")
-        staff_df = calcular_staff_ativos(staff_df, colaboradores_df)
         return staff_df, colaboradores_df
     except Exception as e:
         st.error(f"Erro ao acessar o arquivo ou ler as planilhas no SharePoint: {e}")
@@ -85,7 +84,6 @@ def update_colaboradores_sheet(colaboradores_df):
             response = File.open_binary(ctx, file_name)
             xls = pd.ExcelFile(io.BytesIO(response.content))
             staff_df = pd.read_excel(xls, sheet_name="Staff Operações Clínica")
-            staff_df = calcular_staff_ativos(staff_df, colaboradores_df)
 
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -99,8 +97,8 @@ def update_colaboradores_sheet(colaboradores_df):
             target_folder.upload_file(file_name_only, output.read()).execute_query()
 
             # sucesso
-            st.cache_data.clear()
             st.success("Alterações submetidas com sucesso!")
+            st.cache_data.clear()
             break
 
         except Exception as e:
@@ -168,78 +166,7 @@ def update_sharepoint_file(df_editado):
                 st.error(f"Erro ao salvar o arquivo de apontamentos: {e}")
                 break
 
-HORARIOS_SIMPLES = {
-    "Michelle Stefanelli de Castro": {
-        "06:00 às 12:00",
-        "05:00 às 17:00",
-        "06:00 às 18:00",
-        "05:30 às 11:30",
-        "07:00 às 13:00",
-    },
-    "Simone Cristina de Oliveira Bosco": {
-        "16:00 às 23:00",
-        "17:00 às 05:00",
-        "18:00 às 06:00",
-        "17:00 às 23:00",
-        "17:30 às 05:30",
-        "16:00 às 22:00",
-    },
-}
 
-def get_supervisor(horario: str, original: str) -> str:
-    """Retorna a supervisora de acordo com o horário."""
-    horario = (horario or "").strip()
-    for sup, lista in HORARIOS_SIMPLES.items():
-        if horario in lista:
-            return sup
-    if horario.lower() in {"não aplicável", "nao aplicavel"}:
-        return "Não Aplicável"
-    if horario.lower() == "horista":
-        return "TODAS"
-    return original
-
-
-# Horários referentes a cada cenário
-DIA_6x1   = {"06:00 às 12:00", "05:30 às 11:30", "07:00 às 13:00"}
-NOITE_6x1 = {"16:00 às 23:00", "17:00 às 23:00", "16:00 às 22:00"}
-
-DIA_12x36   = {"05:00 às 17:00", "06:00 às 18:00"}
-NOITE_12x36 = {"17:00 às 05:00", "18:00 às 06:00", "17:30 às 05:30"}
-
-def get_plantao(escala: str, horario: str, turma: str, original: str = "") -> str:
-    """
-    Devolve o Plantão conforme as regras:
-      • 6x1 Dia / Noite
-      • Plantão A/B Dia / Noite (12x36)
-      • Horista
-    Mantém valor antigo se nada casar.
-    """
-    # Horista sempre vence
-    if escala == "Horista":
-        return "Horista"
-
-    # ---------------- 6x1 ----------------
-    if escala == "6x1":
-        if horario in DIA_6x1:
-            return "6x1 Dia"
-        if horario in NOITE_6x1:
-            return "6x1 Noite"
-
-    # --------------- 12x36 ---------------
-    if escala == "12x36":
-        if horario in DIA_12x36:
-            if turma == "A":
-                return "Plantão A Dia"
-            if turma == "B":
-                return "Plantão B Dia"
-        if horario in NOITE_12x36:
-            if turma == "A":
-                return "Plantão A Noite"
-            if turma == "B":
-                return "Plantão B Noite"
-
-    # Nada combinou? Devolve o que já estava
-    return original
 
 def get_deslig_state(colab_key: str, default_date: date | None, default_reason: str):
     """
@@ -263,61 +190,12 @@ def get_deslig_state(colab_key: str, default_date: date | None, default_reason: 
 def so_digitos(v):
     return re.sub(r"\D", "", str(v))
 
-# Localiza a coluna que indica se o colaborador está ativo.
-# Aceita tanto "Ativo" quanto "Ativos", ignorando diferenças de
-# maiúsculas, minúsculas e espaços.
-def encontrar_coluna_ativo(df: pd.DataFrame) -> str | None:
-    for col in df.columns:
-        nome = col.strip().lower()
-        if nome in {"ativo", "ativos"}:
-            return col
-    return None
 
 def clear_cache_and_reload():
     st.cache_data.clear()       # limpa st.cache_data
 
-def calcular_staff_ativos(staff_df: pd.DataFrame, colaboradores_df: pd.DataFrame) -> pd.DataFrame:
-    """Adiciona coluna 'Ativos' com a contagem de colaboradores ativos.
 
-    Se existirem combinações ausentes em ``staff_df`` mas presentes em
-    ``colaboradores_df`` estas serão acrescentadas com ``Quantidade Staff`` igual
-    a zero.
-    """
 
-    staff_df = staff_df.copy()
-
-    merge_cols = ["Escala", "Horário", "Turma", "Cargo"]
-
-    if colaboradores_df.empty:
-        staff_df["Ativos"] = 0
-        return staff_df
-
-    col_ativo = encontrar_coluna_ativo(colaboradores_df)
-    ativos = colaboradores_df
-    if col_ativo:
-         ativos = colaboradores_df[
-            colaboradores_df[col_ativo]
-            .astype(str)
-            .str.strip()
-            .str.lower()
-            == "sim"
-        ]
-
-    counts = (
-        ativos.groupby(merge_cols)
-        .size()
-        .reset_index(name="Ativos")
-    )
-
-    merged = staff_df.merge(counts, on=merge_cols, how="outer")
-    merged["Quantidade Staff"] = merged["Quantidade Staff"].fillna(0)
-
-    if "Ativos" not in merged.columns:
-        # Garante a coluna mesmo se o merge resultar em DataFrame sem 'Ativos'
-        merged["Ativos"] = 0
-    merged["Ativos"] = merged["Ativos"].fillna(0).astype(int)
-
-    return merged[merge_cols + ["Quantidade Staff", "Ativos"]]
 
 # -------------------------------------------------------------------
 # Formulário de cadastro
@@ -332,321 +210,275 @@ def main():
         spacer_left, main, spacer_right = st.columns([2, 4, 2])
         with main:
             st.title("Cadastrar Colaborador")
-            # Lê os dados do Excel com cache
+
+             # Lê os dados do Excel com cache
             staff_df, colaboradores_df = read_excel_sheets_from_sharepoint()
-            
+
+            # Se a planilha Staff está vazia, aborta
             if staff_df.empty:
                 st.error("Não foi possível carregar a planilha 'Staff Operações Clínica'.")
                 return
+
+            # ===========================
+            # Formulário de cadastro
+            # ===========================
+
             
-            # Campos do formulário
+
+            # 👉 Novo: Selecionar somente o ID da vaga
+            id_vagas = sorted(staff_df["ID Vaga"].dropna().unique())
+            id_vaga = st.selectbox("ID Vaga", id_vagas)
+
+            
+
+            # Dados da vaga selecionada
+            vaga_info = staff_df.loc[staff_df["ID Vaga"] == id_vaga].iloc[0]
+            # Calculo vagas disponiveis  
+            disponiveis = vaga_info["Quantidade Staff"] - vaga_info["Ativos"]
+            st.text_input("Vagas Diponiveis", disponiveis, disabled=True)
+            st.markdown("---")
+
+            
+
             nome = st.text_input("Nome Completo do colaborador")
             cpf = str(st.text_input("CPF ou CNPJ", placeholder="Apenas números"))
-            
-            # Para os selects, usamos os valores únicos da planilha de Staff
-            cargos_unicos = sorted(staff_df["Cargo"].unique())
-            cargo = st.selectbox("Cargo", cargos_unicos)
-            
-            escalas_unicas = sorted(staff_df["Escala"].unique())
-            escala = st.selectbox("Escala", escalas_unicas)
-            
-            horarios_unicos = sorted(staff_df["Horário"].unique())
-            horario = st.selectbox("Horário", horarios_unicos)
-            
-            turmas_unicas = sorted(staff_df["Turma"].unique())
-            turma = st.selectbox("Turma", turmas_unicas)
-            
-            entrada = st.date_input("Data da Entrada", value=datetime.today(), format='DD/MM/YYYY')
-            
-            contrato = st.selectbox("Tipo de Contrato", ["CLT", "Autonomo", "Horista"])
-            
-            supervisao = st.selectbox("Supervisão Direta", ["Michelle Stefanelli de Castro", "Simone Cristina de Oliveira Bosco", "TODAS", "Não Aplicável"])
-            
-            responsavel = st.text_input("Responsável pela Inclusão dos dados")
-            
-            if st.button("Enviar"):
-                # Validação dos campos obrigatórios
-                if not nome.strip() or not supervisao.strip() or not responsavel.strip() or not cpf.strip():
-                    st.error("Preencha os campos obrigatórios: Nome, Supervisão Direta e Responsável.")
-                    return
 
+            # Campos somente exibição
+            
+            st.text_input("Cargo", vaga_info["Cargo"], disabled=True)
+            st.text_input("Turma", vaga_info["Departamento"], disabled=True)
+            st.text_input("Escala", vaga_info["Escala"], disabled=True)
+            st.text_input("Horário", vaga_info["Horário"], disabled=True)
+            st.text_input("Turma", vaga_info["Turma"], disabled=True)
+            st.text_input("Plantão", vaga_info["Plantão"], disabled=True)
+            st.text_input("Supervisão", vaga_info["Supervisora"], disabled=True)
+            
+
+            entrada = st.date_input(
+                "Data da Entrada",  
+                format="DD/MM/YYYY",
+            )
+
+            contrato = st.selectbox(
+                "Tipo de Contrato",
+                ["CLT", "Autonomo", "Horista"],
+            )
+
+            responsavel = st.text_input("Responsável pela Inclusão dos dados")
+
+            if st.button("Enviar"):
+                # -----------------------
+                # Validações
+                # -----------------------
+                if not nome.strip() or not responsavel.strip() or not cpf.strip():
+                    st.error(
+                        "Preencha os campos obrigatórios: Nome, Supervisão Direta e Responsável."
+                    )
+                    return
 
                 colab_cpfs = colaboradores_df["CPF ou CNPJ"].apply(so_digitos)
-                # Verifica duplicidade de CPF
                 if cpf in colab_cpfs.values:
-                    st.error("Já existe um colaborador cadastrado com este CPF/CNPJ.")
+                    st.error(
+                        "Já existe um colaborador cadastrado com este CPF/CNPJ."
+                    )
                     return
 
-                # Verifica se a combinação (Escala, Horário, Turma, Cargo) existe na aba de Staff
-                filtro_staff = staff_df[
-                    (staff_df["Escala"] == escala) &
-                    (staff_df["Horário"] == horario) &
-                    (staff_df["Turma"] == turma) &
-                    (staff_df["Cargo"] == cargo)
-                ]
-                if filtro_staff.empty:
-                    st.error("Essa combinação de Escala / Horário / Turma / Cargo não existe na planilha base.")
-                    return
+                # Limite de colaboradores por vaga
+                max_colabs = int(vaga_info["Quantidade Staff"])
+                status_col = "Ativos"
 
-                # Pega a quantidade máxima permitida para essa combinação
-                max_colabs = int(filtro_staff["Quantidade Staff"].iloc[0])
-
-                # Conta quantos colaboradores já foram cadastrados para essa combinação
                 filtro_colab = colaboradores_df[
-                    (colaboradores_df["Escala"] == escala) &
-                    (colaboradores_df["Horário"] == horario) &
-                    (colaboradores_df["Turma"] == turma) &
-                    (colaboradores_df["Cargo"] == cargo)
+                    (colaboradores_df["ID Vaga"] == id_vaga)
+                    & (colaboradores_df[status_col] == "Sim")
                 ]
-
-
-
-                col_status = encontrar_coluna_ativo(colaboradores_df)
-                if col_status:
-                    filtro_colab = filtro_colab[
-                        filtro_colab[col_status].astype(str).str.strip().str.lower() == "sim"
-                    ]
-
 
                 if filtro_colab.shape[0] >= max_colabs:
-                    st.error(f"Limite de colaboradores atingido para essa combinação: {max_colabs}")
+                    st.error(
+                        f"Limite de colaboradores atingido para essa vaga: {max_colabs}"
+                    )
                     return
 
-
-
-                # Se chegou aqui, todos os checks passaram
+                # -----------------------
+                # Cria novo colaborador
+                # -----------------------
                 novo_colaborador = {
+                    "ID Vaga": id_vaga,
                     "Nome Completo do Profissional": nome,
                     "CPF ou CNPJ": cpf,
-                    "Cargo": cargo,
-                    "Departamento": "Operações Clínicas",
-                    "Escala": escala,
-                    "Horário": horario,
-                    "Turma": turma,
-                    "Entrada": entrada,
+                    "Cargo": vaga_info["Cargo"],
+                    "Departamento": vaga_info["Departamento"],
+                    "Escala": vaga_info["Escala"],
+                    "Horário": vaga_info["Horário"],
+                    "Turma": vaga_info["Turma"],
+                    "Plantão": vaga_info["Plantão"],
+                    "Supervisão Direta": vaga_info["Supervisora"],
+                    "Data Entrada": entrada,
                     "Tipo de Contrato": contrato,
-                    "Supervisão Direta": supervisao,
-                    "Status do Profissional": "",
                     "Responsável pela Inclusão dos dados": responsavel,
-                    (col_status or "Ativos"): "Sim",
+                    status_col: "Sim",
                     "Status do Profissional": "Menos de 3 meses",
                 }
-                
 
                 colaboradores_df = pd.concat(
                     [colaboradores_df, pd.DataFrame([novo_colaborador])],
-                    ignore_index=True
-                    )
+                    ignore_index=True,
+                )
 
                 # 5️⃣  Salva de volta no SharePoint, limpa cache e avisa
                 update_colaboradores_sheet(colaboradores_df)
                 st.cache_data.clear()
-
 # --------------------------------------------------------------------
 # Edição de colaboradores
 # --------------------------------------------------------------------
 
         with tabs[2]:
-            spacer_left, main, spacer_right = st.columns([2, 4, 2])
-            with main:
+            spacer_left, main_col, spacer_right = st.columns([2, 4, 2])
+            with main_col:
                 if colaboradores_df.empty:
                     st.info("Não há colaboradores na base")
                     st.stop()
 
                 st.title("Atualizar Colaborador")
 
-                # 1) Selecionar colaborador ---------------------------------------------------
+                # 1) Seleciona colaborador
                 nomes = colaboradores_df["Nome Completo do Profissional"].dropna().sort_values().unique()
                 selec_nome = st.selectbox("Selecione o colaborador", nomes, key="sel_colab")
 
-                linha = colaboradores_df.loc[ colaboradores_df["Nome Completo do Profissional"] == selec_nome ].iloc[0]
+                linha = colaboradores_df.loc[colaboradores_df["Nome Completo do Profissional"] == selec_nome].iloc[0]
 
-                # 2) Campos sempre visíveis ---------------------------------------------------
-                nome = st.text_input("Nome Completo do Profissional", value=linha["Nome Completo do Profissional"],
-                                    key=f"nome_{selec_nome}")
-                
-                cpf = st.text_input("CPF ou CNPJ", value=linha["CPF ou CNPJ"], key=f"cpf_{selec_nome}")
+                old_id_vaga = linha.get("ID Vaga", "")
+                old_ativo = linha.get("Ativos", "Não")
 
-                lista_status = ["Em Treinamento", "Apto", "Afastado",
-                                "Desistiu antes do onboarding", "Desligado"]
-                status_prof = st.selectbox("Status do Profissional", lista_status,
-                                        index=lista_status.index(linha["Status do Profissional"])
-                                                if linha["Status do Profissional"] in lista_status else 0,
-                                        key=f"status_{selec_nome}")
-                
-                
+                # 2) Seleciona a vaga
+                id_vagas = sorted(staff_df["ID Vaga"].dropna().unique())
+                idx_vaga = id_vagas.index(old_id_vaga) if old_id_vaga in id_vagas else 0
+                id_vaga = st.selectbox("ID Vaga", id_vagas, index=idx_vaga, key=f"idvaga_{selec_nome}")
 
-                def _sel(label, serie, default):
-                    ops = sorted(serie.dropna().unique())
-                    idx = ops.index(default) if default in ops else 0
-                    return st.selectbox(label, ops, index=idx, key=f"{label}_{selec_nome}")
+                vaga_info = staff_df.loc[staff_df["ID Vaga"] == id_vaga].iloc[0]
 
-                departamento  = _sel("Departamento",      colaboradores_df["Departamento"],      linha["Departamento"])
-                cargo         = _sel("Cargo",             colaboradores_df["Cargo"],             linha["Cargo"])
-                tipo_contrato = _sel("Tipo de Contrato",  colaboradores_df["Tipo de Contrato"],  linha["Tipo de Contrato"])
-                escala        = _sel("Escala",            colaboradores_df["Escala"],            linha["Escala"])
-                turma         = _sel("Turma",             colaboradores_df["Turma"],             linha["Turma"])
-                horario       = _sel("Horário",           colaboradores_df["Horário"],           linha["Horário"])
-                
+                # 3) Campos editáveis
+                nome = st.text_input("Nome Completo do Profissional", linha["Nome Completo do Profissional"], key=f"nome_{selec_nome}")
+                cpf = st.text_input("CPF ou CNPJ", linha["CPF ou CNPJ"], key=f"cpf_{selec_nome}")
 
-                responsavel_att = st.text_input("Responsável pela Atualização dos dados")
+                lista_status = ["Em Treinamento", "Apto", "Afastado", "Desistiu antes do onboarding", "Desligado"]
+                status_prof = st.selectbox(
+                    "Status do Profissional",
+                    lista_status,
+                    index=lista_status.index(linha["Status do Profissional"]) if linha["Status do Profissional"] in lista_status else 0,
+                    key=f"status_{selec_nome}",
+                )
 
-                # 3) Calculados (somente leitura) --------------------------------------------
-                supervisor_calc = get_supervisor(horario, linha["Supervisão Direta"])
-                st.text_input("Supervisão Direta", value=supervisor_calc, disabled=True,
-                            key=f"sup_{selec_nome}")
+                tipo_contrato = st.selectbox(
+                    "Tipo de Contrato",
+                    ["CLT", "Autonomo", "Horista"],
+                    index=["CLT", "Autonomo", "Horista"].index(linha["Tipo de Contrato"]) if linha["Tipo de Contrato"] in ["CLT", "Autonomo", "Horista"] else 0,
+                    key=f"contrato_{selec_nome}",
+                )
 
-                plantao_calc = get_plantao(escala, horario, turma, linha.get("Plantão", ""))
-                st.text_input("Plantão", value=plantao_calc, disabled=True,
-                            key=f"plantao_{selec_nome}")
+                responsavel_att = st.text_input("Responsável pela Atualização dos dados", key=f"resp_{selec_nome}")
 
-                # 4) Regras para desligamento -------------------------------------------------
-                data_deslig = None
-                motivo_clt  = linha.get("Desligamento CLT", "")
+                # 4) Campos SOMENTE‑LEITURA provenientes da vaga
+                st.text_input("Departamento", vaga_info["Departamento"], disabled=True, key=f"dep_{selec_nome}")
+                st.text_input("Cargo", vaga_info["Cargo"], disabled=True, key=f"cargo_{selec_nome}")
+                st.text_input("Escala", vaga_info["Escala"], disabled=True, key=f"escala_{selec_nome}")
+                st.text_input("Horário", vaga_info["Horário"], disabled=True, key=f"hora_{selec_nome}")
+                st.text_input("Turma", vaga_info["Turma"], disabled=True, key=f"turma_{selec_nome}")
+                st.text_input("Supervisão Direta", vaga_info["Supervisora"], disabled=True, key=f"sup_{selec_nome}")
+                st.text_input("Plantão", vaga_info["Plantão"], disabled=True, key=f"plantao_{selec_nome}")
+
+                # 5) Disponibilidade da vaga
+                max_colabs = int(vaga_info["Quantidade Staff"])
+                ativos_na_vaga = colaboradores_df[
+                    (colaboradores_df["ID Vaga"] == id_vaga)
+                    & (colaboradores_df["Ativos"] == "Sim")
+                ].shape[0]
+
+                disponiveis = max_colabs - ativos_na_vaga
+                st.info(f"Disponíveis: {disponiveis} / {max_colabs}")
+                if disponiveis <= 0 and status_prof != "Desligado":
+                    st.warning("Esta vaga está lotada. Só Será possível se marcar o colaborador como 'Desligado'.", icon="⚠️")
+
+                # 6) Regras para desligamento
+                data_deslig = linha.get("Data Desligamento", None)
+                motivo_clt = linha.get("Desligamento CLT", "")
                 motivo_auto = linha.get("Saída Autonomo", "")
 
                 if status_prof == "Desligado":
                     key_date, key_reason = get_deslig_state(
                         selec_nome,
-                        linha["Atualização"].date() if pd.notna(linha["Atualização"]) else None,
-                        motivo_clt or motivo_auto
+                        linha.get("Atualização", datetime.now()).date(),
+                        motivo_clt or motivo_auto,
                     )
 
-                    data_deslig = st.date_input("Data do desligamento", format='DD/MM/YYYY', key=key_date)
+                    data_deslig = st.date_input(
+                        "Data do desligamento",
+                        format="DD/MM/YYYY",
+                    )
 
                     if tipo_contrato.lower() == "clt":
                         lista_clt = ["Solicitação de Desligamento", "Desligamento pela Gestão"]
-                        if st.session_state[key_reason] not in lista_clt:
+                        if st.session_state.get(key_reason) not in lista_clt:
                             st.session_state[key_reason] = lista_clt[0]
                         motivo_clt = st.selectbox("Motivo do desligamento (CLT)", lista_clt, key=key_reason)
                         motivo_auto = ""
                     elif tipo_contrato.lower() == "autonomo":
                         lista_auto = ["Distrato", "Solicitação de Distrato", "Distrato pela Gestão"]
-                        if st.session_state[key_reason] not in lista_auto:
+                        if st.session_state.get(key_reason) not in lista_auto:
                             st.session_state[key_reason] = lista_auto[0]
                         motivo_auto = st.selectbox("Motivo do distrato (Autônomo)", lista_auto, key=key_reason)
                         motivo_clt = ""
                     else:
                         motivo_clt = motivo_auto = ""
-                else:
-                    # limpa session_state se saiu de "Desligado"
-                    for k in list(st.session_state.keys()):
-                        if k.startswith(("ds_data_", "ds_reason_")):
-                            st.session_state.pop(k, None)
-                    motivo_clt = motivo_auto = ""
 
-                # 5) Campo Ativo calculado ----------------------------------------------------
-                ativo_calc = "Não" if status_prof == "Desligado" else linha.get("Ativos", "Sim")
-
-                st.markdown("---")
-
-                # 6) Botão SALVAR -------------------------------------------------------------
-                if st.button("Salvar alterações", key=f"btn_save_{selec_nome}"):
+                # 7) Botão SALVAR
+                if st.button("Salvar alterações", key=f"save_{selec_nome}"):
                     if not responsavel_att.strip():
                         st.error("Preencha o campo Responsável pela Atualização dos dados.")
-                        return
-
-
-                    # 6.1 Detecta alterações -------------------------------------------------
-                    sem_mudanca = all([
-                        nome            == linha["Nome Completo do Profissional"],
-                        status_prof     == linha["Status do Profissional"],
-                        departamento    == linha["Departamento"],
-                        cargo           == linha["Cargo"],
-                        tipo_contrato   == linha["Tipo de Contrato"],
-                        escala          == linha["Escala"],
-                        turma           == linha["Turma"],
-                        horario         == linha["Horário"],
-                        supervisor_calc == linha["Supervisão Direta"],
-                        plantao_calc    == linha["Plantão"],
-                        ativo_calc      == linha.get("Ativos", "Sim"),
-                        motivo_clt      == linha.get("Desligamento CLT", ""),
-                        motivo_auto     == linha.get("Saída Autonomo", ""),
-                        (
-                            (status_prof != "Desligado" and pd.isna(linha["Atualização"])) or
-                            (status_prof == "Desligado" and pd.notna(linha["Atualização"])
-                            and linha["Atualização"].date() == (data_deslig or linha["Atualização"].date()))
-                        ),
-                    ])
-                    if sem_mudanca:
-                        st.toast("Nenhuma alteração detectada — nada para salvar.")
                         st.stop()
 
-                    # 6.2 Valida combinação na aba Staff ------------------------------------
-                    filtro_staff = staff_df[
-                        (staff_df["Escala"]  == escala) &
-                        (staff_df["Horário"] == horario) &
-                        (staff_df["Turma"]   == turma) &
-                        (staff_df["Cargo"]   == cargo)
-                    ]
-                    if filtro_staff.empty:
-                        st.error("Essa combinação de Escala / Horário / Turma / Cargo não existe na planilha base.")
-                        st.stop()
-                    
-                    max_colabs = int(filtro_staff["Quantidade Staff"].iloc[0])
+                    novo_ativo = "Não" if status_prof == "Desligado" else "Sim"
 
-                    # 6.3 Limite de colaboradores -------------------------------------------
-                    mask_nova_comb = (
-                        (colaboradores_df["Escala"]  == escala) &
-                        (colaboradores_df["Horário"] == horario) &
-                        (colaboradores_df["Turma"]   == turma) &
-                        (colaboradores_df["Cargo"]   == cargo)
-                    )
+                    # ➤ Regras de ajuste de Ativos no staff_df
+                    if status_prof == "Desligado":
+                        staff_df.loc[staff_df["ID Vaga"] == old_id_vaga, "Ativos"] = (
+                            staff_df.loc[staff_df["ID Vaga"] == old_id_vaga, "Ativos"].astype(int) - 1
+                        )
+                    elif old_id_vaga != id_vaga:
+                        staff_df.loc[staff_df["ID Vaga"] == old_id_vaga, "Ativos"] = (
+                            staff_df.loc[staff_df["ID Vaga"] == old_id_vaga, "Ativos"].astype(int) - 1
+                        )
+                        staff_df.loc[staff_df["ID Vaga"] == id_vaga, "Ativos"] = (
+                            staff_df.loc[staff_df["ID Vaga"] == id_vaga, "Ativos"].astype(int) + 1
+                        )
 
-                    # exclui o registro que está sendo atualizado  ➜  index != linha.name
-                    filtro_colab = colaboradores_df[mask_nova_comb & (colaboradores_df.index != linha.name)]
-
-                    col_status = encontrar_coluna_ativo(colaboradores_df)
-                    if col_status:
-                        filtro_colab = filtro_colab[
-                            filtro_colab[col_status].astype(str).str.strip().str.lower() == "sim"
-                        ]
-
-                    if filtro_colab.shape[0] >= max_colabs:
-                        st.error(f"Limite de colaboradores atingido para essa combinação: {max_colabs}")
-                        st.stop()
-
-                    # 6.4 Atualiza DataFrame e grava ----------------------------------------
-                    colaboradores_df.loc[
-                        colaboradores_df["Nome Completo do Profissional"] == selec_nome,
-                        [
-                            "Nome Completo do Profissional",
-                            "Status do Profissional",
-                            "CPF ou CNPJ",
-                            "Departamento",
-                            "Cargo",
-                            "Tipo de Contrato",
-                            "Escala",
-                            "Turma",
-                            "Horário",
-                            "Supervisão Direta",
-                            "Atualização",
-                            "Plantão",
-                            "Desligamento CLT",
-                            "Saída Autonomo",
-                            col_status or "Ativos",
-                            "Responsável Atualização",
-                        ],
-                    ] = [
-                        nome,
-                        status_prof,
-                        cpf,
-                        departamento,
-                        cargo,
-                        tipo_contrato,
-                        escala,
-                        turma,
-                        horario,
-                        supervisor_calc,
-                        datetime.combine(data_deslig, datetime.min.time()) if data_deslig else datetime.now(),
-                        plantao_calc,
-                        motivo_clt,
-                        motivo_auto,
-                        ativo_calc,
-                        responsavel_att
+                    # Atualiza linha no colaboradores_df
+                    colaboradores_df.loc[linha.name, [
+                        "ID Vaga", "Nome Completo do Profissional", "CPF ou CNPJ", "Cargo", "Departamento",
+                        "Escala", "Horário", "Turma", "Tipo de Contrato", "Supervisão Direta", "Plantão",
+                        "Status do Profissional", "Ativos", "Responsável Atualização", "Atualização"
+                    ]] = [
+                        id_vaga, nome, cpf, vaga_info["Cargo"], vaga_info["Departamento"],
+                        vaga_info["Escala"], vaga_info["Horário"], vaga_info["Turma"],
+                        tipo_contrato, vaga_info["Supervisora"], vaga_info["Plantão"],
+                        status_prof, novo_ativo, responsavel_att, datetime.now()
                     ]
 
+                    # Campos de desligamento
+                    if status_prof == "Desligado":
+                        colaboradores_df.loc[linha.name, "Ativos"] = "Não"
+                        colaboradores_df.loc[linha.name, "Data Desligamento"] = data_deslig
+                        if tipo_contrato.lower() == "clt":
+                            colaboradores_df.loc[linha.name, "Desligamento CLT"] = motivo_clt
+                            colaboradores_df.loc[linha.name, "Saída Autonomo"] = ""
+                        elif tipo_contrato.lower() == "autonomo":
+                            colaboradores_df.loc[linha.name, "Saída Autonomo"] = motivo_auto
+                            colaboradores_df.loc[linha.name, "Desligamento CLT"] = ""
+                        else:
+                            colaboradores_df.loc[linha.name, ["Desligamento CLT", "Saída Autonomo"]] = ""
+
+                    # Salva nos sheets
                     update_colaboradores_sheet(colaboradores_df)
+                    update_staff_sheet(staff_df)
 
 
 # --------------------------------------------------------------------
@@ -917,82 +749,66 @@ def main():
 # Edição de Staff
 #---------------------------------------------------------------------
 
-    with tabs[1]:
-        st.title("Relação de Vagas")
+        with tabs[1]:
+            st.title("Relação de Vagas")
 
-        # 👉 Carrega a planilha
-        staff_df_raw, _ = read_excel_sheets_from_sharepoint()
+            # 1) Garante que ID Vaga não está como índice
+            for df in (staff_df, colaboradores_df):
+                if df.index.name == "ID Vaga":
+                    df.reset_index(inplace=True)
 
-        if staff_df_raw.empty:
-            st.info("Planilha vazia.")
-            st.stop()
-        
-
-        # ---------------------------------------------------------
-        # Mantemos uma versão numérica para comparação/salvamento
-        # ---------------------------------------------------------
-        staff_df_raw.index = range(1, len(staff_df_raw) + 1)
-        staff_df_numeric_base = staff_df_raw.copy()
-        staff_df_numeric_base["Quantidade Staff"] = (
-            pd.to_numeric(staff_df_numeric_base["Quantidade Staff"], errors="coerce")
-            .fillna(0)
-            .astype(int)
-        )
-
-        if "Ativos" in staff_df_numeric_base.columns:
-            staff_df_numeric_base["Ativos"] = (
-                pd.to_numeric(staff_df_numeric_base["Ativos"], errors="coerce")
-                .fillna(0)
-                .astype(int)
-            )
-
-        # ---------------------------------------------------------
-        # Versão apenas para exibição/edição (quantidade como string)
-        # ---------------------------------------------------------
-        staff_df_display = staff_df_numeric_base.copy()
-        staff_df_display["Quantidade Staff"] = staff_df_display["Quantidade Staff"].astype(str)
-        staff_df_display["Ativos"] = staff_df_display["Ativos"].astype(int)
-
-        edit_staff = st.data_editor(
-            staff_df_display,
-            num_rows="dynamic",
-            key="editor_staff",
-            column_config={
-                "Ativos": st.column_config.NumberColumn("Ativos", disabled=True)
-            },
-        )
-
-        # ---------------------------------------------------------
-        # Botão de salvamento com verificação de mudanças
-        # ---------------------------------------------------------
-        if st.button("Salvar"):
-
-            if edit_staff["Quantidade Staff"].isnull().any():
-                st.error("Preencha todos os campos linhas referente a posição sendo criada!")
+            # 2) Colunas-chave
+            if "ID Vaga" not in staff_df.columns:
+                st.error("'ID Vaga' não está em staff_df")
+                st.stop()
+            if "ID Vaga" not in colaboradores_df.columns:
+                st.error("'ID Vaga' não está em colaboradores_df")
                 st.stop()
 
-            # Converte o DF editado para numérico antes de comparar/salvar
-            edit_staff_numeric = edit_staff.copy()
-            edit_staff_numeric["Quantidade Staff"] = (
-                pd.to_numeric(edit_staff_numeric["Quantidade Staff"], errors="coerce")
-                .fillna(0)
-                .astype(int)
+            # 3) Recalcula staff_df["Ativos"]
+            ativos = colaboradores_df[colaboradores_df["Ativos"] == "Sim"]
+            contagem = ativos.groupby("ID Vaga").size()
+            staff_df["Ativos"] = staff_df["ID Vaga"].map(contagem).fillna(0).astype(int)
+
+            # 4) Define colunas não editáveis
+            non_editable_cols = ["Ativos"]
+            column_config = {
+                col: st.column_config.Column(disabled=True) if col in non_editable_cols else st.column_config.Column()
+                for col in staff_df.columns
+            }
+
+            # Guarda cópia original para detectar mudanças
+            original_df = staff_df.copy()
+
+            # 5) Exibe editor com opção de excluir linhas
+            edited_df = st.data_editor(
+                staff_df,
+                column_config=column_config,
+                hide_index=True,
+                num_rows="dynamic",  # permite excluir linhas
+                use_container_width=True,
+                key="staff_editor",
             )
 
-            if "Ativos" in edit_staff_numeric.columns:
-                edit_staff_numeric["Ativos"] = (
-                    pd.to_numeric(edit_staff_numeric["Ativos"], errors="coerce")
-                    .fillna(0)
-                    .astype(int)
-                )
+            # 6) Botão SALVAR – salva planilha inteira
+            if st.button("Salvar alterações", key="save_staff"):
+                # Garante que coluna Ativos permanece correta (não salva alterações manuais)
+                edited_df["Ativos"] = edited_df["ID Vaga"].map(contagem).fillna(0).astype(int)
 
-            # Se não houve alteração, apenas informa e sai
-            if edit_staff_numeric.equals(staff_df_numeric_base):
-                st.toast("Nenhuma alteração detectada. Nada foi salvo!")
-            else:
-                update_staff_sheet(edit_staff_numeric)
+                if edited_df.equals(original_df):
+                    st.warning("Nenhuma alteração detectada – nada foi salvo.")
+                    st.stop()
+
+                if "Quantidade Staff" in edited_df.columns:
+                    edited_df["Quantidade Staff"] = (
+                        pd.to_numeric(edited_df["Quantidade Staff"], errors="coerce")
+                        .fillna(0)
+                        .astype(int)
+                    )
+
+                # Grava planilha completa
+                update_staff_sheet(edited_df)
                 st.cache_data.clear()
-                st.success("Staff atualizado! Tecle F5")
 
 
 if __name__ == "__main__":
