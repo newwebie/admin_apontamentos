@@ -483,12 +483,10 @@ def main():
 
         # 4) Filtro por Código do Estudo --------------------------------------------
         columns_to_display = [
-            "Status", "Código do Estudo", "Responsável Pela Correção", "Plantão",
-            "Participante", "Período", "Grau De Criticidade Do Apontamento",
-            "Documentos", "Apontamento", "Data do Apontamento",
-            "Disponibilizado para Verificação", "Prazo Para Resolução",
-            "Data Resolução", "Justificativa", "Responsável Pelo Apontamento",
-            "Origem Do Apontamento", "Data Atualização", "Responsável Atualização"
+            "Status", "Código do Estudo","Data Resolução", "Justificativa", "Responsável Pela Correção", 
+            "Plantão", "Participante", "Período", "Grau De Criticidade Do Apontamento","Prazo Para Resolução",
+            "Documentos", "Apontamento", "Data do Apontamento", "Disponibilizado para Verificação", 
+            "Responsável Pelo Apontamento", "Origem Do Apontamento", "Data Atualização", "Responsável Atualização"
         ]
         df_filtrado = df_filtrado[["ID"] + columns_to_display]
 
