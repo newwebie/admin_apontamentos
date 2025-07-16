@@ -555,7 +555,7 @@ def main():
         with st.form("grade"):
             responsavel_att = st.selectbox(
                 "Responsável pela Atualização dos dados",
-                ["", "Glaucia Araujo", "Guilherme Gonçalves", "Sandra de Souza"],
+                ["", "Michelle Stefanelli", "Guilherme Gonçalves", "Sandra de Souza"],
                 key="resp_att"
             )
 
