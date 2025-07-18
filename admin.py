@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, date
 import io
+import string
+import random
 import re
 import csv
 import time
@@ -181,6 +183,15 @@ def so_digitos(v):
 def clear_cache_and_reload():
     st.cache_data.clear()
 
+def generate_custom_id(existing_ids: set[str]) -> str:
+    while True:
+        digits = random.choices(string.digits, k=3)
+        letters = random.choices(string.ascii_uppercase, k=2)
+        chars = digits + letters
+        random.shuffle(chars)
+        new_id = "".join(chars)
+        if new_id not in existing_ids:
+            return new_id
 
 # --------------------------------------------------------------------
 # Interface principal
@@ -426,12 +437,7 @@ def main():
 
         df = get_sharepoint_file()
 
-        # 1) Garante coluna ID fixa --------------------------------------------------
-        if "ID" not in df.columns:
-            df.insert(0, "ID", range(1, len(df) + 1))  # primeira criação
 
-        # ID deve ser numérico (Int64 para permitir NA em novas linhas)
-        df["ID"] = pd.to_numeric(df["ID"], errors="coerce").astype("Int64")
 
         # 2) Converte colunas de data ------------------------------------------------
         colunas_data = [
@@ -483,12 +489,12 @@ def main():
 
         # 4) Filtro por Código do Estudo --------------------------------------------
         columns_to_display = [
-            "Status", "Código do Estudo","Data Resolução", "Justificativa", "Responsável Pela Correção", 
+            "ID","Status", "Código do Estudo","Data Resolução", "Justificativa", "Responsável Pela Correção", 
             "Plantão", "Participante", "Período", "Grau De Criticidade Do Apontamento","Prazo Para Resolução",
             "Documentos", "Apontamento", "Data do Apontamento", "Disponibilizado para Verificação", 
             "Responsável Pelo Apontamento", "Origem Do Apontamento", "Data Atualização", "Responsável Atualização"
         ]
-        df_filtrado = df_filtrado[["ID"] + columns_to_display]
+        df_filtrado = df_filtrado[columns_to_display]
 
         if st.session_state.show_pending:
             df_view = df_filtrado[df_filtrado["Status"] == "PENDENTE"].copy()
@@ -504,9 +510,6 @@ def main():
             if estudo_sel != "Todos":
                 df_view = df_view[df_view["Código do Estudo"] == estudo_sel]
 
-        # 5) Move coluna ID para primeira posição e cria snapshot --------------------
-        first = df_view.pop("ID")
-        df_view.insert(0, "ID", first)
 
         selectbox_columns_opcoes = {
             "Status": [
@@ -537,7 +540,7 @@ def main():
             elif col in colunas_data:
                 columns_config[col] = st.column_config.DateColumn(col, format="DD/MM/YYYY")
             elif col == "ID":
-                columns_config[col] = st.column_config.NumberColumn("ID", disabled=True)
+                columns_config[col] = st.column_config.TextColumn("ID", disabled=True)
             else:
                 df_view[col] = df_view[col].astype(str).replace("nan", "")
                 columns_config[col] = st.column_config.TextColumn(col)
@@ -576,21 +579,14 @@ def main():
                 st.warning("Escolha quem é o responsável antes de submeter.")
                 st.stop()
 
-            # 1) Converte IDs novos vazios para NA  ---------------------------------
-            df_editado["ID"] = pd.to_numeric(df_editado["ID"], errors="coerce").astype("Int64")
+            existing_ids = set(df["ID"].astype(str))
+            linhas_sem_id = df_editado["ID"].isna() | (df_editado["ID"].astype(str).str.strip() == "")
+            for idx in df_editado[linhas_sem_id].index:
+                new_id = generate_custom_id(existing_ids)
+                df_editado.at[idx, "ID"] = new_id
+                existing_ids.add(new_id)
 
-            # 2) Gera IDs para linhas recém‑criadas --------------------------------
-            if df["ID"].notna().any():
-                proximo_id = int(df["ID"].max()) + 1
-            else:
-                proximo_id = 1
-
-            linhas_sem_id = df_editado["ID"].isna()
-            qtd_novas = linhas_sem_id.sum()
-            if qtd_novas:
-                df_editado.loc[linhas_sem_id, "ID"] = range(proximo_id, proximo_id + qtd_novas)
-
-            df_editado["ID"] = df_editado["ID"].astype(int)
+            df_editado["ID"] = df_editado["ID"].astype(str)
 
             # 3) Função de normalização --------------------------------------------
             def _norm(df_like: pd.DataFrame) -> pd.DataFrame:
@@ -637,11 +633,11 @@ def main():
                 novas = edit_idx.loc[novas_linhas].reset_index()
                 for _, row in novas.iterrows():
                     df = pd.concat([df, row.to_frame().T], ignore_index=True)
-                    idx_modificados.append(int(row["ID"]))
+                    idx_modificados.append(str(row["ID"]))
 
             # Processa linhas alteradas
             for _, row in linhas_alt.iterrows():
-                rid = int(row["ID"])
+                rid = str(row["ID"])
                 if not _norm(df.loc[df["ID"] == rid]).equals(_norm(row.to_frame().T)):
                     status_ant = str(df.loc[df["ID"] == rid, "Status"].iloc[0]).strip().upper()
                     df.loc[df["ID"] == rid, cols_cmp] = row[cols_cmp].values
