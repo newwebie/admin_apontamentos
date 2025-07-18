@@ -429,7 +429,7 @@ def main():
                 update_staff_sheet(staff_df)
 
     # -----------------------------------------------------------------
-    # TAB ‑ APONTAMENTOS (REFATORADO COM COLUNA 'ID')
+    # TAB ‑ APONTAMENTOS 
     # -----------------------------------------------------------------
     
     with tabs[0]:
@@ -510,6 +510,9 @@ def main():
             if estudo_sel != "Todos":
                 df_view = df_view[df_view["Código do Estudo"] == estudo_sel]
 
+        resp = sorted(df["Responsável Pela Correção"].dropna().unique())
+        plant = sorted(df["Plantão"].dropna().unique())
+
 
         selectbox_columns_opcoes = {
             "Status": [
@@ -525,10 +528,17 @@ def main():
                 'PP990', 'PP991', 'PP992', 'PP993', 'PP994', 'PP995', 'PP996', 'PP997', 'PP998', 'PP999'
             ],
             "Período": [
-                '1° Período', '2° Período', '3° Período', '4° Período', '5° Período',
+                'N/a', 'Pós','1° Período', '2° Período', '3° Período', '4° Período', '5° Período',
                 '6° Período', '7° Período', '8° Período', '9° Período', '10° Período'
             ],
             "Grau De Criticidade Do Apontamento": ["Baixo", "Médio", "Alto"],
+
+            "Código do Estudo": opcoes_estudos,
+
+            "Responsável Pela Correção": resp,
+
+            "Plantão": plant
+
         }
 
         columns_config = {}
