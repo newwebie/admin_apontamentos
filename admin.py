@@ -262,6 +262,11 @@ def main():
                 if filtro_colab.shape[0] >= max_colabs:
                     st.error(f"Limite de colaboradores atingido para essa vaga: {max_colabs}")
                     return
+                
+                if vaga_info["Plantão"] == "A Dia" or "B Dia" or "6x1 Dia":
+                    info_script = "OPDIA"
+                elif vaga_info["Plantão"] == "A Noite" or "B Noite" or "6x1 Noite":
+                    info_script = "OPNOI"
 
                 novo_colaborador = {
                     "ID Vaga": id_vaga,
@@ -278,7 +283,9 @@ def main():
                     "Tipo de Contrato": contrato,
                     "Responsável pela Inclusão dos dados": responsavel,
                     status_col: "Sim",
-                    "Status do Profissional": "Menos de 3 meses",
+                    "Status do Profissional": "Apto",
+                    "campo para script": info_script,
+                    "Tempo de Casa": "Menos de 3 meses"
                 }
 
                 colaboradores_df = pd.concat(
