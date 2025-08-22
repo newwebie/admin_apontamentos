@@ -7,45 +7,65 @@ import random
 import re
 import csv
 import time
-from office365.sharepoint.client_context import ClientContext
-from office365.sharepoint.files.file import File
-from office365.runtime.auth.user_credential import UserCredential
+from sp_connector import SPConnector
 
 
-# === Configurações do SharePoint ===
-username           = st.secrets["sharepoint"]["username"]
-password           = st.secrets["sharepoint"]["password"]
-site_url           = st.secrets["sharepoint"]["site_url"]
-file_name          = st.secrets["sharepoint"]["file_name"]
-apontamentos_file  = st.secrets["sharepoint"]["apontamentos_file"]
-bio_file           = st.secrets["sharepoint"]["bio_file"]
+TENANT_ID = st.secrets["graph"]["tenant_id"]
+CLIENT_ID = st.secrets["graph"]["client_id"]
+CLIENT_SECRET = st.secrets["graph"]["client_secret"]
+HOSTNAME = st.secrets["graph"]["hostname"]
+SITE_PATH = st.secrets["graph"]["site_path"]
+LIBRARY   = st.secrets["graph"]["library_name"]
+
+
+COLABS_FILE = st.secrets["files"]["colaboradores"]   
+APONT_FILE  = st.secrets["files"]["apontamentos"]    
+
+
+
+# Instância única do conector (cacheada)
+@st.cache_resource
+def _sp():
+    return SPConnector(
+        TENANT_ID, CLIENT_ID, CLIENT_SECRET,
+        hostname=HOSTNAME, site_path=SITE_PATH, library_name=LIBRARY
+    )
+
 
 
 # --------------------------------------------------------------------
-# Utilidades gerais
+# Helpers
+# --------------------------------------------------------------------
+def _is_locked_error(e: Exception) -> bool:
+    msg = str(e).lower()
+    code = getattr(getattr(e, "response", None), "status_code", None)
+    return (code == 423) or (" 423" in msg) or ("-2147018894" in msg) or ("lock" in msg)
+
+
+# --------------------------------------------------------------------
+# Utilidades gerais (versões MSAL/Graph via SPConnector)
 # --------------------------------------------------------------------
 @st.cache_data
 def read_excel_sheets_from_sharepoint():
+    """Lê as abas 'Staff Operações Clínica' e 'Colaboradores' do arquivo COLABS_FILE."""
     try:
-        ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
-        response = File.open_binary(ctx, file_name)
-        xls = pd.ExcelFile(io.BytesIO(response.content))
-        staff_df        = pd.read_excel(xls, sheet_name="Staff Operações Clínica")
+        # baixa bytes e abre o Excel inteiro (preserva ambas as abas)
+        raw = _sp().download(COLABS_FILE)
+        xls = pd.ExcelFile(io.BytesIO(raw))
+        staff_df         = pd.read_excel(xls, sheet_name="Staff Operações Clínica")
         colaboradores_df = pd.read_excel(xls, sheet_name="Colaboradores")
         return staff_df, colaboradores_df
     except Exception as e:
-        st.error(f"Erro ao acessar o arquivo ou ler as planilhas no SharePoint: {e}")
+        st.error(f"Erro ao acessar o arquivo ou ler as planilhas (MSAL/Graph): {e}")
         return pd.DataFrame(), pd.DataFrame()
 
 
-def update_staff_sheet(staff_df):
+def update_staff_sheet(staff_df: pd.DataFrame):
+    """Atualiza somente a aba 'Staff Operações Clínica' preservando 'Colaboradores'."""
     while True:
         try:
-            ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
-
-            # Lê o workbook para preservar aba "Colaboradores"
-            response = File.open_binary(ctx, file_name)
-            xls = pd.ExcelFile(io.BytesIO(response.content))
+            raw = _sp().download(COLABS_FILE)
+            xls = pd.ExcelFile(io.BytesIO(raw))
             colaboradores_df = pd.read_excel(xls, sheet_name="Colaboradores")
 
             out = io.BytesIO()
@@ -54,114 +74,107 @@ def update_staff_sheet(staff_df):
                 colaboradores_df.to_excel(w, sheet_name="Colaboradores", index=False)
             out.seek(0)
 
-            folder = "/".join(file_name.split("/")[:-1])
-            name   = file_name.split("/")[-1]
-            ctx.web.get_folder_by_server_relative_url(folder).upload_file(name, out.read()).execute_query()
+            _sp().upload_small(COLABS_FILE, out.getvalue(), overwrite=True)
 
             st.cache_data.clear()
             st.success("Alterações submetidas com sucesso!")
             break
 
         except Exception as e:
-            locked = (
-                getattr(e, "response_status", None) == 423
-                or "-2147018894" in str(e)
-                or "lock" in str(e).lower()
-            )
-            if locked:
+            if _is_locked_error(e):
                 st.warning("Arquivo em uso. Tentando novamente em 5 segundos...")
                 time.sleep(5)
                 continue
-            else:
-                st.error(f"Erro ao atualizar a planilha de Staff no SharePoint: {e}")
-                break
+            st.error(f"Erro ao atualizar a planilha de Staff (MSAL/Graph): {e}")
+            break
 
 
-def update_colaboradores_sheet(colaboradores_df):
+def update_colaboradores_sheet(colaboradores_df: pd.DataFrame):
+    """Atualiza somente a aba 'Colaboradores' preservando 'Staff Operações Clínica'."""
     while True:
         try:
-            ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
-
-            # Recarrega o arquivo para preservar a aba de Staff
-            response = File.open_binary(ctx, file_name)
-            xls = pd.ExcelFile(io.BytesIO(response.content))
+            raw = _sp().download(COLABS_FILE)
+            xls = pd.ExcelFile(io.BytesIO(raw))
             staff_df = pd.read_excel(xls, sheet_name="Staff Operações Clínica")
 
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                staff_df.to_excel(writer, sheet_name="Staff Operações Clínica", index=False)
-                colaboradores_df.to_excel(writer, sheet_name="Colaboradores", index=False)
-            output.seek(0)
+            out = io.BytesIO()
+            with pd.ExcelWriter(out, engine="openpyxl") as w:
+                staff_df.to_excel(w, sheet_name="Staff Operações Clínica", index=False)
+                colaboradores_df.to_excel(w, sheet_name="Colaboradores", index=False)
+            out.seek(0)
 
-            folder_path     = "/".join(file_name.split("/")[:-1])
-            file_name_only  = file_name.split("/")[-1]
-            target_folder   = ctx.web.get_folder_by_server_relative_url(folder_path)
-            target_folder.upload_file(file_name_only, output.read()).execute_query()
+            _sp().upload_small(COLABS_FILE, out.getvalue(), overwrite=True)
 
             st.success("Alterações submetidas com sucesso!")
             st.cache_data.clear()
             break
 
         except Exception as e:
-            locked = (
-                getattr(e, "response_status", None) == 423
-                or "-2147018894" in str(e)
-                or "lock" in str(e).lower()
-            )
-            if locked:
+            if _is_locked_error(e):
                 st.warning("Arquivo em uso. Tentando novamente em 5 segundos...")
                 time.sleep(5)
                 continue
-            else:
-                st.error(f"Erro ao atualizar a planilha de Colaboradores no SharePoint: {e}")
-                break
+            st.error(f"Erro ao atualizar a planilha de Colaboradores (MSAL/Graph): {e}")
+            break
 
 
 @st.cache_data
 def get_sharepoint_file():
+    """Lê o arquivo de apontamentos (APONT_FILE)."""
     try:
-        ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
-        response = File.open_binary(ctx, apontamentos_file)
-        df = pd.read_excel(io.BytesIO(response.content))
+        # se tiver múltiplas abas, troque por ExcelFile+sheet_name
+        df = _sp().read_excel(APONT_FILE)
         return df
     except Exception as e:
-        st.error(f"Erro ao ler o arquivo de apontamentos: {e}")
+        st.error(f"Erro ao ler o arquivo de apontamentos (MSAL/Graph): {e}")
         return pd.DataFrame()
 
 
-def update_sharepoint_file(df_editado):
+# Função para atualizar o arquivo Excel (Apontamentos) no SharePoint
+def update_sharepoint_file(df: pd.DataFrame) -> pd.DataFrame | None:
+    attempts = 0
     while True:
         try:
-            ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
+            # Carrega versão mais recente do arquivo
+            base_df = _sp().read_excel(APONT_FILE)
+            if not base_df.empty:
+                base_df["ID"] = base_df["ID"].astype(str)
+                base_df.set_index("ID", inplace=True)
+            else:
+                base_df = pd.DataFrame().set_index("ID")
+
+            df = df.copy()
+            if "ID" in df.columns:
+                df["ID"] = df["ID"].astype(str)
+                df.set_index("ID", inplace=True)
+
+            # Atualiza linhas existentes e adiciona novas
+            base_df.update(df)
+            novos = df.index.difference(base_df.index)
+            if len(novos) > 0:
+                base_df = pd.concat([base_df, df.loc[novos]])
+
+            base_df.reset_index(inplace=True)
 
             output = io.BytesIO()
-            with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                df_editado.to_excel(writer, index=False)
+            base_df.to_excel(output, index=False)
             output.seek(0)
+            _sp().upload_small(APONT_FILE, output.getvalue(), overwrite=True)
 
-            folder_path    = "/".join(apontamentos_file.split("/")[:-1])
-            file_name_only = apontamentos_file.split("/")[-1]
-            target_folder  = ctx.web.get_folder_by_server_relative_url(folder_path)
-            target_folder.upload_file(file_name_only, output.read()).execute_query()
-
-            st.cache_data.clear()
-            st.session_state["df_apontamentos"] = df_editado
-            st.success("Apontamentos atualizados com sucesso!")
-            break
-
+            st.success("Mudanças submetidas com sucesso! Recarregue a página para ver as mudanças")
+            return base_df
         except Exception as e:
-            locked = (
-                getattr(e, "response_status", None) == 423
-                or "-2147018894" in str(e)
-                or "lock" in str(e).lower()
-            )
-            if locked:
-                st.warning("Arquivo em uso. Tentando novamente em 5 segundos...")
+            attempts += 1
+            msg = str(e)
+            # 409/412 = conflito de versão | 429 = throttling
+            if any(x in msg for x in ["409", "412", "429"]) and attempts < 5:
+                st.warning("Outra pessoa está salvando ou limite de chamadas. Tentando novamente em 5 segundos...")
                 time.sleep(5)
                 continue
-            else:
-                st.error(f"Erro ao salvar o arquivo de apontamentos: {e}")
-                break
+            st.error(f"Erro ao salvar no SharePoint (Graph): {msg}")
+            return None
+
+
 
 
 def get_deslig_state(colab_key: str, default_date: date | None, default_reason: str):
@@ -244,12 +257,12 @@ def main():
             if st.button("Enviar"):
                 if not nome.strip() or not responsavel.strip() or not cpf.strip():
                     st.error("Preencha os campos obrigatórios: Nome, Supervisão Direta e Responsável.")
-                    return
+                    st.stop()
 
                 colab_cpfs = colaboradores_df["CPF ou CNPJ"].apply(so_digitos)
                 if cpf in colab_cpfs.values:
                     st.error("Já existe um colaborador cadastrado com este CPF/CNPJ.")
-                    return
+                    st.stop()
 
                 max_colabs = int(vaga_info["Quantidade Staff"])
                 status_col = "Ativos"
@@ -258,15 +271,18 @@ def main():
                     (colaboradores_df["ID Vaga"] == id_vaga) &
                     (colaboradores_df[status_col] == "Sim")
                 ]
-
                 if filtro_colab.shape[0] >= max_colabs:
                     st.error(f"Limite de colaboradores atingido para essa vaga: {max_colabs}")
-                    return
-                
-                if vaga_info["Plantão"] == "A Dia" or "B Dia" or "6x1 Dia":
+                    st.stop()
+
+                # ✅ corrige o 'or' que sempre era True
+                plantao = str(vaga_info["Plantão"]).strip()
+                if plantao in ("A Dia", "B Dia", "6x1 Dia"):
                     info_script = "OPDIA"
-                elif vaga_info["Plantão"] == "A Noite" or "B Noite" or "6x1 Noite":
+                elif plantao in ("A Noite", "B Noite", "6x1 Noite"):
                     info_script = "OPNOI"
+                else:
+                    info_script = ""
 
                 novo_colaborador = {
                     "ID Vaga": id_vaga,
@@ -285,7 +301,7 @@ def main():
                     status_col: "Sim",
                     "Status do Profissional": "Apto",
                     "campo para script": info_script,
-                    "Tempo de Casa": "Menos de 3 meses"
+                    "Tempo de Casa": "Menos de 3 meses",
                 }
 
                 colaboradores_df = pd.concat(
@@ -293,7 +309,24 @@ def main():
                     ignore_index=True,
                 )
 
+                # 🔄 persiste Colaboradores
                 update_colaboradores_sheet(colaboradores_df)
+
+                # 🔢 (re)calcula Ativos da vaga com base no DF atualizado
+                ativos_count = colaboradores_df[
+                    (colaboradores_df["ID Vaga"] == id_vaga) &
+                    (colaboradores_df[status_col] == "Sim")
+                ].shape[0]
+
+                # 📝 atualiza Staff -> coluna 'Ativos' da vaga
+                mask = staff_df["ID Vaga"] == id_vaga
+                staff_df.loc[mask, "Ativos"] = int(ativos_count)
+
+                # 💾 persiste Staff
+                update_staff_sheet(staff_df)
+
+                st.success("Colaborador cadastrado e contagem de 'Ativos' atualizada.")
+
                 st.cache_data.clear()
 
     # -----------------------------------------------------------------
