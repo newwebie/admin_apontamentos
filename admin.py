@@ -17,6 +17,9 @@ from auth_microsoft import (
     create_user_header,
 )
 
+# aqui pq quebra o codigo mais pra baixo
+st.set_page_config(layout="wide")
+
 TENANT_ID = st.secrets["graph"]["tenant_id_graph"]
 CLIENT_ID = st.secrets["graph"]["client_id_graph"]
 CLIENT_SECRET = st.secrets["graph"]["client_secret_graph"]
@@ -242,7 +245,7 @@ st.session_state["user_email"] = user_email
 # --------------------------------------------------------------------
 # Interface principal
 # --------------------------------------------------------------------
-st.set_page_config(layout="wide")
+
 
 def main():
     st.title("📋 Painel ADM")
