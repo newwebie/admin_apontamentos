@@ -9,10 +9,17 @@ import csv
 import time
 from sp_connector import SPConnector
 
+# import do módulo de autenticação
+from auth_microsoft import (
+    AuthManager,
+    MicrosoftAuth,
+    create_login_page,
+    create_user_header,
+)
 
-TENANT_ID = st.secrets["graph"]["tenant_id"]
-CLIENT_ID = st.secrets["graph"]["client_id"]
-CLIENT_SECRET = st.secrets["graph"]["client_secret"]
+TENANT_ID = st.secrets["graph"]["tenant_id_graph"]
+CLIENT_ID = st.secrets["graph"]["client_id_graph"]
+CLIENT_SECRET = st.secrets["graph"]["client_secret_graph"]
 HOSTNAME = st.secrets["graph"]["hostname"]
 SITE_PATH = st.secrets["graph"]["site_path"]
 LIBRARY   = st.secrets["graph"]["library_name"]
@@ -205,6 +212,32 @@ def generate_custom_id(existing_ids: set[str]) -> str:
         new_id = "".join(chars)
         if new_id not in existing_ids:
             return new_id
+        
+
+
+# -------------------------------------------------
+# Autenticação e contexto do usuário
+# -------------------------------------------------
+auth = MicrosoftAuth()
+
+
+logged_in = create_login_page(auth)
+if not logged_in:
+    st.stop()
+
+
+# Garantir token válido durante a sessão
+AuthManager.check_and_refresh_token(auth)
+create_user_header()
+
+user = AuthManager.get_current_user() or {}
+display_name = user.get("displayName", "Usuário")
+user_email = (user.get("mail") or user.get("userPrincipalName") or "").lower()
+
+
+st.session_state["display_name"] = display_name
+st.session_state["user_email"] = user_email
+
 
 # --------------------------------------------------------------------
 # Interface principal
@@ -394,6 +427,58 @@ def main():
             st.info(f"Disponíveis: {disponiveis} / {max_colabs}")
             if disponiveis <= 0 and status_prof != "Desligado":
                 st.warning("Esta vaga está lotada. Só será possível se marcar o colaborador como 'Desligado'.", icon="⚠️")
+            
+
+            # Conta quantos colaboradores ativos por vaga
+            ativos_por_vaga = (
+                colaboradores_df[colaboradores_df["Ativos"] == "Sim"]
+                .groupby("ID Vaga")
+                .size()
+                .reset_index(name="Ativos")
+            )
+
+            # Pega capacidade (Quantidade Staff) por ID Vaga a partir do staff_df
+            # (se houver repetição por linha de staff, drop_duplicates garante 1 linha por ID Vaga)
+            vaga_info_df = (
+                staff_df[["ID Vaga", "Quantidade Staff"]]
+                .dropna(subset=["ID Vaga"])
+                .drop_duplicates(subset=["ID Vaga"])
+            )
+
+            # Junta com o total permitido e preenche Ativos ausentes com 0
+            resumo_vagas = (
+                vaga_info_df
+                .merge(ativos_por_vaga, on="ID Vaga", how="left")
+                .fillna({"Ativos": 0})
+            )
+
+            # Garante tipos inteiros e calcula Disponíveis
+            resumo_vagas["Quantidade Staff"] = resumo_vagas["Quantidade Staff"].astype(int)
+            resumo_vagas["Ativos"] = resumo_vagas["Ativos"].astype(int)
+            resumo_vagas["Disponíveis"] = resumo_vagas["Quantidade Staff"] - resumo_vagas["Ativos"]
+
+            # Mostra tabela no Streamlit
+            tabela =    (
+                resumo_vagas[["ID Vaga", "Disponíveis", "Ativos", "Quantidade Staff"]]
+                .sort_values("ID Vaga").copy()
+            )
+
+            editada = st.data_editor(
+                    tabela,
+                    hide_index=True,
+                    use_container_width=True,
+                    num_rows="dynamic",
+                    column_config={
+                        "ID Vaga": st.column_config.TextColumn("ID Vaga", disabled=True),
+                        "Ativos": st.column_config.NumberColumn("Ativos", disabled=True),
+                        "Quantidade Staff": st.column_config.NumberColumn(
+                            "Quantidade Staff", min_value=0, step=1
+                        ),
+                        "Disponíveis": st.column_config.NumberColumn("Disponíveis", disabled=True),
+                    },
+                    key="resumo_editor",
+                )
+
 
             data_deslig  = linha.get("Data Desligamento", None)
             motivo_clt   = linha.get("Desligamento CLT", "")
@@ -494,37 +579,11 @@ def main():
         # 3) Cópia para filtros ------------------------------------------------------
         df_filtrado = df.copy()
 
-        # --- Botões rápidos (pendente / verificando) -------------------------------
-        def toggle_pending():
-            st.session_state.show_pending = not st.session_state.get("show_pending", False)
-            st.session_state.show_verificando = False
-
-        def toggle_verificando():
-            st.session_state.show_verificando = not st.session_state.get("show_verificando", False)
-            st.session_state.show_pending = False
-
-        st.session_state.setdefault("show_pending", False)
-        st.session_state.setdefault("show_verificando", False)
 
         col_btn1, col_btn2, col_btn3, *_ = st.columns(6)
 
+
         with col_btn1:
-            label_pend = (
-                "🔍  Filtrar Pendentes"
-                if not st.session_state.show_pending
-                else "📄  Mostrar todos"
-            )
-            st.button(label_pend, key="btn_toggle_pendentes", on_click=toggle_pending)
-
-        with col_btn2:
-            label_verif = (
-                "🔎  Filtrar Verificando"
-                if not st.session_state.show_verificando
-                else "📄  Mostrar todos"
-            )
-            st.button(label_verif, key="btn_toggle_verificando", on_click=toggle_verificando)
-
-        with col_btn3:
             st.button("🔄  Atualizar", key="btn_clear_cache", on_click=clear_cache_and_reload)
 
         # 4) Filtro por Código do Estudo --------------------------------------------
@@ -535,20 +594,38 @@ def main():
             "Responsável Pelo Apontamento", "Origem Do Apontamento", "Data Atualização", "Responsável Atualização"
         ]
         df_filtrado = df_filtrado[columns_to_display]
+    # --- aplica filtros base (pendente/verificando/todos) ---
+        df_view = df_filtrado.copy()
 
-        if st.session_state.show_pending:
-            df_view = df_filtrado[df_filtrado["Status"] == "PENDENTE"].copy()
-        elif st.session_state.show_verificando:
-            df_view = df_filtrado[df_filtrado["Status"] == "VERIFICANDO"].copy()
-        else:
-            df_view = df_filtrado.copy()
-
+                    # garante que a lista de estudos exista antes de usar em qualquer lugar
         if "Código do Estudo" in df.columns:
             opcoes_estudos = ["Todos"] + sorted(df["Código do Estudo"].dropna().unique())
-            estudo_sel = st.selectbox("Selecione o Estudo", opcoes_estudos, key="estudo_selecionado")
+        else:
+            opcoes_estudos = ["Todos"]
 
-            if estudo_sel != "Todos":
-                df_view = df_view[df_view["Código do Estudo"] == estudo_sel]
+        # 1) Linha de filtros: 2 colunas (Status | Estudo)
+        col_id, col_status, col_estudo = st.columns(3)
+
+        with col_id:
+            id_input = st.text_input("Filtrar por ID", key="id_input").strip()
+            if id_input:
+                df_view = df_view[df_view["ID"].astype(str).str.contains(id_input, case=False, na=False)]
+
+        with col_status:
+            status_opcoes = ["Todos"] + sorted(df["Status"].dropna().unique())
+            status_sel = st.selectbox("Filtrar por Status", status_opcoes, key="status_sel")
+
+        with col_estudo:
+            opcoes_estudos = ["Todos"] + sorted(df["Código do Estudo"].dropna().unique())
+            estudo_sel = st.selectbox("Filtrar por Estudo", opcoes_estudos, key="estudo_sel")
+
+        # 2) Aplica filtros
+        if status_sel != "Todos":
+            df_view = df_view[df_view["Status"] == status_sel]
+
+        if estudo_sel != "Todos":
+            df_view = df_view[df_view["Código do Estudo"] == estudo_sel]
+
 
         resp = sorted(df["Responsável Pela Correção"].dropna().unique())
         plant = sorted(df["Plantão"].dropna().unique())
@@ -603,11 +680,7 @@ def main():
         cols_cmp = [c for c in snapshot.columns if c not in ("ID", "Data Atualização", "Responsável Atualização")]
 
         with st.form("grade"):
-            responsavel_att = st.selectbox(
-                "Responsável pela Atualização dos dados",
-                ["", "Michelle Stefanelli", "Guilherme Gonçalves", "Sandra de Souza"],
-                key="resp_att"
-            )
+            responsavel_att = st.session_state.get("display_name")
 
             df_editado = st.data_editor(
                 snapshot,
@@ -711,11 +784,28 @@ def main():
             else:
                 st.toast("Nenhuma alteração detectada. Nada foi salvo!")
 
+
+
     # -----------------------------------------------------------------
     # TAB ‑ POSIÇÕES (STAFF)
     # -----------------------------------------------------------------
     with tabs[1]:
         st.title("Relação de Vagas")
+
+        ####
+        def calcular_contagem_ativos(colaboradores_df: pd.DataFrame) -> pd.Series:
+            ativos_flag = (
+                colaboradores_df["Ativos"]
+                .astype(str).str.strip().str.upper()
+            )
+            ativos = colaboradores_df[ativos_flag == "SIM"]
+            return ativos.groupby("ID Vaga").size()
+
+        def aplicar_ativos_no_staff(staff_df: pd.DataFrame, contagem: pd.Series) -> pd.DataFrame:
+            staff_final = staff_df.copy()
+            staff_final["Ativos"] = staff_final["ID Vaga"].map(contagem).fillna(0).astype(int)
+            return staff_final
+
 
         staff_df, colaboradores_df = read_excel_sheets_from_sharepoint()
 
@@ -730,21 +820,17 @@ def main():
             st.error("'ID Vaga' não está em colaboradores_df")
             st.stop()
 
-        ativos      = colaboradores_df[colaboradores_df["Ativos"] == "Sim"]
-        contagem    = ativos.groupby("ID Vaga").size()
-        staff_df["Ativos"] = staff_df["ID Vaga"].map(contagem).fillna(0).astype(int)
+        contagem = calcular_contagem_ativos(colaboradores_df)
+        staff_final = aplicar_ativos_no_staff(staff_df, contagem)
 
-        non_editable_cols = ["Ativos"]
+        # trava Ativos no editor
         column_config = {
-            col: st.column_config.Column(disabled=True) if col in non_editable_cols
-            else st.column_config.Column()
-            for col in staff_df.columns
+            col: st.column_config.Column(disabled=(col == "Ativos"))
+            for col in staff_final.columns
         }
 
-        original_df = staff_df.copy()
-
-        edited_df = st.data_editor(
-            staff_df,
+        edited_view = st.data_editor(
+            staff_final,
             column_config=column_config,
             hide_index=True,
             num_rows="dynamic",
@@ -753,18 +839,21 @@ def main():
         )
 
         if st.button("Salvar alterações", key="save_staff"):
-            edited_df["Quantidade Staff"] = (
-                pd.to_numeric(edited_df["Quantidade Staff"], errors="coerce")
-                .fillna(0)
-                .astype(int)
+            # coerção do que é editável
+            edited_view["Quantidade Staff"] = (
+                pd.to_numeric(edited_view["Quantidade Staff"], errors="coerce")
+                .fillna(0).astype(int)
             )
-            edited_df["Ativos"] = edited_df["ID Vaga"].map(contagem).fillna(0).astype(int)
 
-            if edited_df.equals(original_df):
-                st.warning("Nenhuma alteração detectada – nada foi salvo.")
-                st.stop()
+            # RE-CALCULA de novo no salvar (garantia)
+            contagem = calcular_contagem_ativos(colaboradores_df)
+            edited_view["Ativos"] = edited_view["ID Vaga"].map(contagem).fillna(0).astype(int)
 
-            update_staff_sheet(edited_df)
+            # agora você PODE persistir Ativos porque ele acabou de ser recalculado
+            update_staff_sheet(edited_view)
+
+            # guarda em memória pro resto do script usar já atualizado
+            st.session_state["staff_final"] = edited_view.copy()
             st.cache_data.clear()
 
 
