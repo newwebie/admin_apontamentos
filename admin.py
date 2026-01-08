@@ -129,53 +129,189 @@ def update_colaboradores_sheet(colaboradores_df: pd.DataFrame):
 
 
 @st.cache_data
-def get_sharepoint_file():
-    """Lê o arquivo de apontamentos (APONT_FILE)."""
+def get_sharepoint_file(sheet_name: str = "apontamentos"):
+    """
+    Lê o arquivo Excel do SharePoint que contém múltiplas sheets:
+    - 'apontamentos': dados principais
+    - 'log': histórico de operações
+    """
     try:
-        # se tiver múltiplas abas, troque por ExcelFile+sheet_name
-        df = _sp().read_excel(APONT_FILE)
-        return df
+        data = _sp().download(APONT_FILE)
+        xls = pd.ExcelFile(io.BytesIO(data))
+
+        if sheet_name in xls.sheet_names:
+            return pd.read_excel(xls, sheet_name=sheet_name)
+        else:
+            # Se a sheet não existir, retorna DataFrame vazio
+            return pd.DataFrame()
     except Exception as e:
         st.error(f"Erro ao ler o arquivo de apontamentos (MSAL/Graph): {e}")
         return pd.DataFrame()
 
 
 # Função para atualizar o arquivo Excel (Apontamentos) no SharePoint
-def update_sharepoint_file(df: pd.DataFrame) -> pd.DataFrame | None:
+def update_sharepoint_file(df: pd.DataFrame, usuario: str = "", operacao: str = "ATUALIZAÇÃO", responsavel_indicado: str = "") -> pd.DataFrame | None:
+    """
+    Atualiza o arquivo Excel no SharePoint de forma segura, com logging e monitoramento.
+
+    Estratégia:
+    1. Carrega a versão mais recente do arquivo (ambas sheets: apontamentos e log)
+    2. Para linhas existentes: atualiza APENAS as colunas que foram modificadas
+    3. Para linhas novas: adiciona ao final
+    4. Registra operação no log
+    5. Salva arquivo com ambas as sheets
+    6. Tenta novamente em caso de conflito de versão
+    """
     attempts = 0
     while True:
         try:
             # Carrega versão mais recente do arquivo
-            base_df = _sp().read_excel(APONT_FILE)
+            data = _sp().download(APONT_FILE)
+            xls = pd.ExcelFile(io.BytesIO(data))
+
+            # Carrega sheet de apontamentos
+            if "apontamentos" in xls.sheet_names:
+                base_df = pd.read_excel(xls, sheet_name="apontamentos")
+            else:
+                base_df = pd.DataFrame()
+
+            # Carrega sheet de log (ou cria vazio)
+            if "log" in xls.sheet_names:
+                log_df = pd.read_excel(xls, sheet_name="log")
+                # Adiciona coluna "Responsável Indicado" se não existir
+                if "Responsável Indicado" not in log_df.columns:
+                    log_df["Responsável Indicado"] = ""
+            else:
+                log_df = pd.DataFrame(columns=["Data", "ID", "Estudo", "Operação", "Campo", "Valor Anterior", "Valor Depois", "Responsável", "Responsável Indicado"])
+
+            df_to_save = df.copy()
+            if "ID" not in df_to_save.columns:
+                st.error("DataFrame sem coluna ID!")
+                return None
+
+            df_to_save["ID"] = df_to_save["ID"].astype(str)
+
+            # Variáveis para logging
+            ids_novos = []
+            ids_atualizados = []
+
             if not base_df.empty:
                 base_df["ID"] = base_df["ID"].astype(str)
-                base_df.set_index("ID", inplace=True)
+
+                # Separa registros novos dos existentes
+                ids_to_save = set(df_to_save["ID"].tolist())
+                existing_ids = set(base_df["ID"].tolist())
+
+                new_ids = ids_to_save - existing_ids
+                update_ids = ids_to_save & existing_ids
+
+                # Adiciona registros completamente novos
+                if new_ids:
+                    new_rows = df_to_save[df_to_save["ID"].isin(new_ids)]
+                    base_df = pd.concat([base_df, new_rows], ignore_index=True)
+                    ids_novos = list(new_ids)
+
+                # Atualiza registros existentes coluna por coluna
+                for id_val in update_ids:
+                    idx_base = base_df.index[base_df["ID"] == id_val].tolist()
+                    idx_update = df_to_save.index[df_to_save["ID"] == id_val].tolist()
+
+                    if idx_base and idx_update:
+                        idx_b = idx_base[0]
+                        idx_u = idx_update[0]
+
+                        # Atualiza apenas as colunas que existem em ambos
+                        for col in df_to_save.columns:
+                            if col in base_df.columns:
+                                base_df.at[idx_b, col] = df_to_save.at[idx_u, col]
+                        ids_atualizados.append(id_val)
             else:
-                base_df = pd.DataFrame().set_index("ID")
+                # Se o arquivo está vazio, salva tudo
+                base_df = df_to_save.copy()
+                ids_novos = df_to_save["ID"].tolist()
 
-            df = df.copy()
-            if "ID" in df.columns:
-                df["ID"] = df["ID"].astype(str)
-                df.set_index("ID", inplace=True)
+            # === ADICIONA ENTRADAS NO LOG ===
+            # Para cada ID criado, adiciona uma entrada no log
+            for id_val in ids_novos:
+                # Pega o estudo do apontamento
+                estudo = df_to_save.loc[df_to_save["ID"] == id_val, "Código do Estudo"].iloc[0] if "Código do Estudo" in df_to_save.columns else ""
+                status_novo = df_to_save.loc[df_to_save["ID"] == id_val, "Status"].iloc[0] if "Status" in df_to_save.columns else "PENDENTE"
 
-            # Atualiza linhas existentes e adiciona novas
-            base_df.update(df)
-            novos = df.index.difference(base_df.index)
-            if len(novos) > 0:
-                base_df = pd.concat([base_df, df.loc[novos]])
+                # Pega o responsável pela correção do apontamento
+                resp_correcao = df_to_save.loc[df_to_save["ID"] == id_val, "Responsável Pela Correção"].iloc[0] if "Responsável Pela Correção" in df_to_save.columns else ""
 
-            base_df.reset_index(inplace=True)
+                nova_log_entry = pd.DataFrame([{
+                    "Data": datetime.now(),
+                    "ID": id_val,
+                    "Estudo": estudo,
+                    "Operação": operacao,
+                    "Campo": "Status",
+                    "Valor Anterior": "",
+                    "Valor Depois": status_novo,
+                    "Responsável": usuario if usuario else "Sistema",
+                    "Responsável Indicado": responsavel_indicado if responsavel_indicado else resp_correcao
+                }])
+                log_df = pd.concat([log_df, nova_log_entry], ignore_index=True)
 
+            # Para cada ID atualizado, adiciona uma entrada no log
+            for id_val in ids_atualizados:
+                # Pega valores antigos e novos
+                valor_anterior = base_df.loc[base_df["ID"] == id_val, "Status"].iloc[0] if "Status" in base_df.columns else ""
+                valor_depois = df_to_save.loc[df_to_save["ID"] == id_val, "Status"].iloc[0] if "Status" in df_to_save.columns else ""
+                estudo = df_to_save.loc[df_to_save["ID"] == id_val, "Código do Estudo"].iloc[0] if "Código do Estudo" in df_to_save.columns else ""
+
+                # Só registra se houver mudança
+                if valor_anterior != valor_depois:
+                    # Pega o responsável pela correção do apontamento
+                    resp_correcao = df_to_save.loc[df_to_save["ID"] == id_val, "Responsável Pela Correção"].iloc[0] if "Responsável Pela Correção" in df_to_save.columns else ""
+
+                    nova_log_entry = pd.DataFrame([{
+                        "Data": datetime.now(),
+                        "ID": id_val,
+                        "Estudo": estudo,
+                        "Operação": operacao,
+                        "Campo": "Status",
+                        "Valor Anterior": valor_anterior,
+                        "Valor Depois": valor_depois,
+                        "Responsável": usuario if usuario else "Sistema",
+                        "Responsável Indicado": responsavel_indicado if responsavel_indicado else resp_correcao
+                    }])
+                    log_df = pd.concat([log_df, nova_log_entry], ignore_index=True)
+
+            # === SALVA O ARQUIVO COM MÚLTIPLAS SHEETS ===
             output = io.BytesIO()
-            base_df.to_excel(output, index=False)
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                base_df.to_excel(writer, sheet_name='apontamentos', index=False)
+                log_df.to_excel(writer, sheet_name='log', index=False)
             output.seek(0)
+
             _sp().upload_small(APONT_FILE, output.getvalue(), overwrite=True)
 
             st.success("Mudanças submetidas com sucesso! Recarregue a página para ver as mudanças")
             return base_df
+
         except Exception as e:
             attempts += 1
             msg = str(e)
+
+            # Adiciona log de erro
+            try:
+                log_erro = pd.DataFrame([{
+                    "Data": datetime.now(),
+                    "ID": "",
+                    "Estudo": "",
+                    "Operação": operacao,
+                    "Campo": "ERRO",
+                    "Valor Anterior": "",
+                    "Valor Depois": msg[:100],
+                    "Responsável": usuario if usuario else "Sistema",
+                    "Responsável Indicado": ""
+                }])
+                if 'log_df' in locals():
+                    log_df = pd.concat([log_erro, log_df], ignore_index=True)
+            except:
+                pass
+
             # 409/412 = conflito de versão | 429 = throttling
             if any(x in msg for x in ["409", "412", "429"]) and attempts < 5:
                 st.warning("Outra pessoa está salvando ou limite de chamadas. Tentando novamente em 5 segundos...")
@@ -570,7 +706,8 @@ def main():
         # 2) Converte colunas de data ------------------------------------------------
         colunas_data = [
             "Data do Apontamento", "Prazo Para Resolução", "Data de Verificação",
-            "Data Resolução", "Data Atualização", "Disponibilizado para Verificação"
+            "Data Resolução", "Data Atualização", "Disponibilizado para Verificação",
+            "Data Início Verificação"
         ]
         for col in colunas_data:
             if col in df.columns:
@@ -591,11 +728,15 @@ def main():
 
         # 4) Filtro por Código do Estudo --------------------------------------------
         columns_to_display = [
-            "ID","Status", "Código do Estudo","Data Resolução", "Justificativa", "Responsável Pela Correção", 
-            "Plantão", "Participante", "Período", "Grau De Criticidade Do Apontamento","Prazo Para Resolução",
-            "Documentos", "Apontamento", "Data do Apontamento", "Disponibilizado para Verificação", 
-            "Responsável Pelo Apontamento", "Origem Do Apontamento", "Data Atualização", "Responsável Atualização"
+            "ID", "Status", "Código do Estudo", "Data Resolução", "Justificativa",
+            "Responsável Pela Correção", "Plantão", "Participante", "Período",
+            "Grau De Criticidade Do Apontamento", "Prazo Para Resolução",
+            "Documentos", "Apontamento", "Data do Apontamento", "Disponibilizado para Verificação",
+            "Responsável Pelo Apontamento", "Origem Do Apontamento", "Data Atualização",
+            "Responsável Atualização", "Verificador", "Responsável Indicado", "Data Início Verificação"
         ]
+        # Filtra apenas colunas que existem no DataFrame
+        columns_to_display = [col for col in columns_to_display if col in df_filtrado.columns]
         df_filtrado = df_filtrado[columns_to_display]
     # --- aplica filtros base (pendente/verificando/todos) ---
         df_view = df_filtrado.copy()
@@ -678,9 +819,21 @@ def main():
         columns_config["Responsável Atualização"] = st.column_config.TextColumn(
             "Responsável Atualização", disabled=True
         )
+        # Novas colunas adicionadas para compatibilidade com Forms-OP-clinica
+        columns_config["Verificador"] = st.column_config.TextColumn(
+            "Verificador", disabled=False
+        )
+        columns_config["Responsável Indicado"] = st.column_config.TextColumn(
+            "Responsável Indicado", disabled=False
+        )
+        columns_config["Data Início Verificação"] = st.column_config.DateColumn(
+            "Data Início Verificação", format="DD/MM/YYYY", disabled=False
+        )
 
         snapshot = df_view.copy(deep=True)
-        cols_cmp = [c for c in snapshot.columns if c not in ("ID", "Data Atualização", "Responsável Atualização")]
+        # Colunas excluídas da comparação (campos automáticos)
+        cols_excluir_cmp = ("ID", "Data Atualização", "Responsável Atualização")
+        cols_cmp = [c for c in snapshot.columns if c not in cols_excluir_cmp]
 
         with st.form("grade"):
             responsavel_att = st.session_state.get("display_name")
@@ -782,7 +935,11 @@ def main():
                 mudou = True
 
             if mudou:
-                update_sharepoint_file(df.reset_index(drop=True))
+                update_sharepoint_file(
+                    df.reset_index(drop=True),
+                    usuario=responsavel_att.strip(),
+                    operacao="EDIÇÃO_ADMIN"
+                )
                 st.cache_data.clear()
             else:
                 st.toast("Nenhuma alteração detectada. Nada foi salvo!")
