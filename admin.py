@@ -150,7 +150,7 @@ def get_sharepoint_file(sheet_name: str = "apontamentos"):
 
 
 # Função para atualizar o arquivo Excel (Apontamentos) no SharePoint
-def update_sharepoint_file(df: pd.DataFrame, usuario: str = "", operacao: str = "ATUALIZAÇÃO", responsavel_indicado: str = "") -> pd.DataFrame | None:
+def update_sharepoint_file(df: pd.DataFrame, usuario: str = "", operacao: str = "ATUALIZAÇÃO", responsavel_indicado: str = "", alteracoes_detalhadas: list = None) -> pd.DataFrame | None:
     """
     Atualiza o arquivo Excel no SharePoint de forma segura, com logging e monitoramento.
 
@@ -161,6 +161,10 @@ def update_sharepoint_file(df: pd.DataFrame, usuario: str = "", operacao: str = 
     4. Registra operação no log
     5. Salva arquivo com ambas as sheets
     6. Tenta novamente em caso de conflito de versão
+
+    Parâmetros:
+        alteracoes_detalhadas: Lista de dicts com alterações específicas para log detalhado.
+            Cada dict deve ter: {"id": str, "estudo": str, "campo": str, "valor_anterior": str, "valor_depois": str, "resp_indicado": str}
     """
     attempts = 0
     while True:
@@ -231,37 +235,29 @@ def update_sharepoint_file(df: pd.DataFrame, usuario: str = "", operacao: str = 
                 ids_novos = df_to_save["ID"].tolist()
 
             # === ADICIONA ENTRADAS NO LOG ===
-            # Para cada ID criado, adiciona uma entrada no log
-            for id_val in ids_novos:
-                # Pega o estudo do apontamento
-                estudo = df_to_save.loc[df_to_save["ID"] == id_val, "Código do Estudo"].iloc[0] if "Código do Estudo" in df_to_save.columns else ""
-                status_novo = df_to_save.loc[df_to_save["ID"] == id_val, "Status"].iloc[0] if "Status" in df_to_save.columns else "PENDENTE"
+            # Se alteracoes_detalhadas foi fornecido (vem do Painel ADM), usa ele
+            if alteracoes_detalhadas:
+                for alt in alteracoes_detalhadas:
+                    nova_log_entry = pd.DataFrame([{
+                        "Data": datetime.now(),
+                        "ID": alt.get("id", ""),
+                        "Estudo": alt.get("estudo", ""),
+                        "Operação": operacao,
+                        "Campo": alt.get("campo", ""),
+                        "Valor Anterior": alt.get("valor_anterior", ""),
+                        "Valor Depois": alt.get("valor_depois", ""),
+                        "Responsável": usuario if usuario else "Sistema",
+                        "Responsável Indicado": alt.get("resp_indicado", responsavel_indicado)
+                    }])
+                    log_df = pd.concat([log_df, nova_log_entry], ignore_index=True)
+            else:
+                # Lógica padrão para compatibilidade com Forms-OP-clinica
+                # Para cada ID criado, adiciona uma entrada no log
+                for id_val in ids_novos:
+                    # Pega o estudo do apontamento
+                    estudo = df_to_save.loc[df_to_save["ID"] == id_val, "Código do Estudo"].iloc[0] if "Código do Estudo" in df_to_save.columns else ""
+                    status_novo = df_to_save.loc[df_to_save["ID"] == id_val, "Status"].iloc[0] if "Status" in df_to_save.columns else "PENDENTE"
 
-                # Pega o responsável pela correção do apontamento
-                resp_correcao = df_to_save.loc[df_to_save["ID"] == id_val, "Responsável Pela Correção"].iloc[0] if "Responsável Pela Correção" in df_to_save.columns else ""
-
-                nova_log_entry = pd.DataFrame([{
-                    "Data": datetime.now(),
-                    "ID": id_val,
-                    "Estudo": estudo,
-                    "Operação": operacao,
-                    "Campo": "Status",
-                    "Valor Anterior": "",
-                    "Valor Depois": status_novo,
-                    "Responsável": usuario if usuario else "Sistema",
-                    "Responsável Indicado": responsavel_indicado if responsavel_indicado else resp_correcao
-                }])
-                log_df = pd.concat([log_df, nova_log_entry], ignore_index=True)
-
-            # Para cada ID atualizado, adiciona uma entrada no log
-            for id_val in ids_atualizados:
-                # Pega valores antigos e novos
-                valor_anterior = base_df.loc[base_df["ID"] == id_val, "Status"].iloc[0] if "Status" in base_df.columns else ""
-                valor_depois = df_to_save.loc[df_to_save["ID"] == id_val, "Status"].iloc[0] if "Status" in df_to_save.columns else ""
-                estudo = df_to_save.loc[df_to_save["ID"] == id_val, "Código do Estudo"].iloc[0] if "Código do Estudo" in df_to_save.columns else ""
-
-                # Só registra se houver mudança
-                if valor_anterior != valor_depois:
                     # Pega o responsável pela correção do apontamento
                     resp_correcao = df_to_save.loc[df_to_save["ID"] == id_val, "Responsável Pela Correção"].iloc[0] if "Responsável Pela Correção" in df_to_save.columns else ""
 
@@ -271,12 +267,37 @@ def update_sharepoint_file(df: pd.DataFrame, usuario: str = "", operacao: str = 
                         "Estudo": estudo,
                         "Operação": operacao,
                         "Campo": "Status",
-                        "Valor Anterior": valor_anterior,
-                        "Valor Depois": valor_depois,
+                        "Valor Anterior": "",
+                        "Valor Depois": status_novo,
                         "Responsável": usuario if usuario else "Sistema",
                         "Responsável Indicado": responsavel_indicado if responsavel_indicado else resp_correcao
                     }])
                     log_df = pd.concat([log_df, nova_log_entry], ignore_index=True)
+
+                # Para cada ID atualizado, adiciona uma entrada no log
+                for id_val in ids_atualizados:
+                    # Pega valores antigos e novos
+                    valor_anterior = base_df.loc[base_df["ID"] == id_val, "Status"].iloc[0] if "Status" in base_df.columns else ""
+                    valor_depois = df_to_save.loc[df_to_save["ID"] == id_val, "Status"].iloc[0] if "Status" in df_to_save.columns else ""
+                    estudo = df_to_save.loc[df_to_save["ID"] == id_val, "Código do Estudo"].iloc[0] if "Código do Estudo" in df_to_save.columns else ""
+
+                    # Só registra se houver mudança
+                    if valor_anterior != valor_depois:
+                        # Pega o responsável pela correção do apontamento
+                        resp_correcao = df_to_save.loc[df_to_save["ID"] == id_val, "Responsável Pela Correção"].iloc[0] if "Responsável Pela Correção" in df_to_save.columns else ""
+
+                        nova_log_entry = pd.DataFrame([{
+                            "Data": datetime.now(),
+                            "ID": id_val,
+                            "Estudo": estudo,
+                            "Operação": operacao,
+                            "Campo": "Status",
+                            "Valor Anterior": valor_anterior,
+                            "Valor Depois": valor_depois,
+                            "Responsável": usuario if usuario else "Sistema",
+                            "Responsável Indicado": responsavel_indicado if responsavel_indicado else resp_correcao
+                        }])
+                        log_df = pd.concat([log_df, nova_log_entry], ignore_index=True)
 
             # === SALVA O ARQUIVO COM MÚLTIPLAS SHEETS ===
             output = io.BytesIO()
@@ -701,6 +722,10 @@ def main():
 
         df = get_sharepoint_file()
 
+        # Carrega colaboradores para os campos de seleção
+        _, colaboradores_apontamentos = read_excel_sheets_from_sharepoint()
+        lista_colaboradores = sorted(colaboradores_apontamentos["Nome Completo do Profissional"].dropna().unique().tolist()) if not colaboradores_apontamentos.empty else []
+
 
 
         # 2) Converte colunas de data ------------------------------------------------
@@ -795,7 +820,11 @@ def main():
 
             "Responsável Pela Correção": resp,
 
-            "Plantão": plant
+            "Plantão": plant,
+
+            # Novas colunas com lista de colaboradores
+            "Responsável Indicado": lista_colaboradores,
+            "Verificador": lista_colaboradores
 
         }
 
@@ -819,13 +848,7 @@ def main():
         columns_config["Responsável Atualização"] = st.column_config.TextColumn(
             "Responsável Atualização", disabled=True
         )
-        # Novas colunas adicionadas para compatibilidade com Forms-OP-clinica
-        columns_config["Verificador"] = st.column_config.TextColumn(
-            "Verificador", disabled=False
-        )
-        columns_config["Responsável Indicado"] = st.column_config.TextColumn(
-            "Responsável Indicado", disabled=False
-        )
+        # Data Início Verificação - editável
         columns_config["Data Início Verificação"] = st.column_config.DateColumn(
             "Data Início Verificação", format="DD/MM/YYYY", disabled=False
         )
@@ -903,19 +926,71 @@ def main():
             idx_modificados = []
             df[cols_cmp] = df[cols_cmp].astype(object)
 
+            # Lista para armazenar todas as alterações detalhadas para o log
+            alteracoes_detalhadas = []
+
+            # Função auxiliar para normalizar valor para comparação e log
+            def _normalizar_valor(val):
+                if pd.isna(val) or val is None:
+                    return ""
+                return str(val).strip()
+
             # Processa novas linhas
             novas_linhas = edit_idx.index.difference(snap_idx.index)
             if len(novas_linhas) > 0:
                 novas = edit_idx.loc[novas_linhas].reset_index()
                 for _, row in novas.iterrows():
                     df = pd.concat([df, row.to_frame().T], ignore_index=True)
-                    idx_modificados.append(str(row["ID"]))
+                    rid = str(row["ID"])
+                    idx_modificados.append(rid)
+
+                    # Pega estudo e responsável indicado para o log
+                    estudo = _normalizar_valor(row.get("Código do Estudo", ""))
+                    resp_indicado = _normalizar_valor(row.get("Responsável Indicado", ""))
+
+                    # Para novas linhas, registra cada campo preenchido como "criação"
+                    for col in cols_cmp:
+                        valor_novo = _normalizar_valor(row.get(col, ""))
+                        if valor_novo:  # Só registra se tiver valor
+                            alteracoes_detalhadas.append({
+                                "id": rid,
+                                "estudo": estudo,
+                                "campo": col,
+                                "valor_anterior": "",
+                                "valor_depois": valor_novo,
+                                "resp_indicado": resp_indicado
+                            })
 
             # Processa linhas alteradas
             for _, row in linhas_alt.iterrows():
                 rid = str(row["ID"])
                 if not _norm(df.loc[df["ID"] == rid]).equals(_norm(row.to_frame().T)):
-                    status_ant = str(df.loc[df["ID"] == rid, "Status"].iloc[0]).strip().upper()
+                    # Pega linha original para comparação campo a campo
+                    linha_original = df.loc[df["ID"] == rid].iloc[0]
+
+                    status_ant = str(linha_original.get("Status", "")).strip().upper()
+
+                    # Pega estudo e responsável indicado para o log
+                    estudo = _normalizar_valor(row.get("Código do Estudo", ""))
+                    resp_indicado = _normalizar_valor(row.get("Responsável Indicado", ""))
+
+                    # Compara cada campo e registra alterações
+                    for col in cols_cmp:
+                        valor_anterior = _normalizar_valor(linha_original.get(col, ""))
+                        valor_depois = _normalizar_valor(row.get(col, ""))
+
+                        # Só registra se o valor realmente mudou
+                        if valor_anterior != valor_depois:
+                            alteracoes_detalhadas.append({
+                                "id": rid,
+                                "estudo": estudo,
+                                "campo": col,
+                                "valor_anterior": valor_anterior,
+                                "valor_depois": valor_depois,
+                                "resp_indicado": resp_indicado
+                            })
+
+                    # Atualiza o DataFrame
                     df.loc[df["ID"] == rid, cols_cmp] = row[cols_cmp].values
 
                     novo_status = str(row.get("Status", "")).strip().upper()
@@ -934,11 +1009,23 @@ def main():
                 df = df[~df["ID"].isin(removidos)]
                 mudou = True
 
+                # Registra exclusões no log
+                for rid in removidos:
+                    alteracoes_detalhadas.append({
+                        "id": str(rid),
+                        "estudo": "",
+                        "campo": "REGISTRO",
+                        "valor_anterior": "existente",
+                        "valor_depois": "REMOVIDO",
+                        "resp_indicado": ""
+                    })
+
             if mudou:
                 update_sharepoint_file(
                     df.reset_index(drop=True),
                     usuario=responsavel_att.strip(),
-                    operacao="EDIÇÃO_ADMIN"
+                    operacao="EDIÇÃO_ADMIN",
+                    alteracoes_detalhadas=alteracoes_detalhadas
                 )
                 st.cache_data.clear()
             else:
