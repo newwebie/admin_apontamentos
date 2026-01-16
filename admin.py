@@ -777,27 +777,28 @@ def main():
 
         with col_id:
             id_input = st.text_input("Filtrar por ID", key="id_input").strip()
-            if id_input:
+            if id_input and "ID" in df_view.columns:
                 df_view = df_view[df_view["ID"].astype(str).str.contains(id_input, case=False, na=False)]
 
         with col_status:
-            status_opcoes = ["Todos"] + sorted(df["Status"].dropna().unique())
+            if "Status" in df.columns:
+                status_opcoes = ["Todos"] + sorted(df["Status"].dropna().unique())
+            else:
+                status_opcoes = ["Todos"]
             status_sel = st.selectbox("Filtrar por Status", status_opcoes, key="status_sel")
 
         with col_estudo:
-            opcoes_estudos = ["Todos"] + sorted(df["Código do Estudo"].dropna().unique())
             estudo_sel = st.selectbox("Filtrar por Estudo", opcoes_estudos, key="estudo_sel")
 
         # 2) Aplica filtros
-        if status_sel != "Todos":
+        if status_sel != "Todos" and "Status" in df_view.columns:
             df_view = df_view[df_view["Status"] == status_sel]
 
-        if estudo_sel != "Todos":
+        if estudo_sel != "Todos" and "Código do Estudo" in df_view.columns:
             df_view = df_view[df_view["Código do Estudo"] == estudo_sel]
 
-
-        resp = sorted(df["Responsável Pela Correção"].dropna().unique())
-        plant = sorted(df["Plantão"].dropna().unique())
+        resp = sorted(df["Responsável Pela Correção"].dropna().unique()) if "Responsável Pela Correção" in df.columns else []
+        plant = sorted(df["Plantão"].dropna().unique()) if "Plantão" in df.columns else []
 
 
         selectbox_columns_opcoes = {
