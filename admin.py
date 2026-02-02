@@ -257,15 +257,18 @@ def update_colaboradores_sheet(colaboradores_df: pd.DataFrame):
 def get_sharepoint_file(sheet_name: str = "apontamentos"):
     """
     Lê o arquivo Excel do SharePoint que contém múltiplas sheets:
-    - 'apontamentos': dados principais
+    - 'apontamentos' (ou 'Sheet1' como fallback): dados principais
     - 'log': histórico de operações
     """
     try:
         data = _sp().download(APONT_FILE)
         xls = pd.ExcelFile(io.BytesIO(data))
 
+        # Tenta a sheet solicitada, senão tenta 'Sheet1' como fallback
         if sheet_name in xls.sheet_names:
             return pd.read_excel(xls, sheet_name=sheet_name)
+        elif sheet_name == "apontamentos" and "Sheet1" in xls.sheet_names:
+            return pd.read_excel(xls, sheet_name="Sheet1")
         else:
             # Se a sheet não existir, retorna DataFrame vazio
             return pd.DataFrame()
@@ -298,9 +301,11 @@ def update_sharepoint_file(df: pd.DataFrame, usuario: str = "", operacao: str = 
             data = _sp().download(APONT_FILE)
             xls = pd.ExcelFile(io.BytesIO(data))
 
-            # Carrega sheet de apontamentos
+            # Carrega sheet de apontamentos (tenta 'apontamentos' ou 'Sheet1')
             if "apontamentos" in xls.sheet_names:
                 base_df = pd.read_excel(xls, sheet_name="apontamentos")
+            elif "Sheet1" in xls.sheet_names:
+                base_df = pd.read_excel(xls, sheet_name="Sheet1")
             else:
                 base_df = pd.DataFrame()
 
